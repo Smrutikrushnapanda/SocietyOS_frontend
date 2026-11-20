@@ -7,4 +7,5 @@ export * from './notice';
 export * from './amenity';
 export * from './document';
 export * from './auth';
+export * from './poll';
 

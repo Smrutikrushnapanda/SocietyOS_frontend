@@ -172,6 +172,7 @@
 
 .auth-exact-input {
   flex: 1;
+  min-width: 0;
   height: 100%;
   border: none;
   background: transparent;
@@ -586,3 +587,30 @@
   background: #0f4c81;
   color: #ffffff;
 }
+
+/* Mobile & Soft-Keyboard Responsive Adjustments */
+@media (max-width: 600px) {
+  .auth-root-container {
+    min-height: 100%;
+    min-height: 100dvh;
+    justify-content: flex-start;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-top: max(16px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(32px, env(safe-area-inset-bottom, 0px));
+  }
+  .auth-main-wrapper {
+    justify-content: flex-start;
+    min-height: auto;
+    padding: 8px 16px 32px;
+  }
+  .auth-exact-card {
+    padding: 22px 18px;
+  }
+  .auth-card-single-col,
+  .auth-mobile-card-col {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+

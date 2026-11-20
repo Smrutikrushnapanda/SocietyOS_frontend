@@ -1,0 +1,639 @@
+/* ── Shared Landing Sections Design Tokens & Layout ────────────────── */
+
+/* ── Mobile Application Section ── */
+.mobileSection {
+  padding: 88px 24px;
+  background: #ffffff;
+}
+
+.sectionContainer {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.centerHeader {
+  text-align: center;
+  max-width: 640px;
+  margin: 0 auto 52px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  border: 1px solid #cce8e2;
+}
+
+.sectionTitle {
+  font-size: clamp(28px, 3.4vw, 40px);
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.03em;
+  margin: 0 0 12px;
+  line-height: 1.18;
+}
+
+.sectionSubtitle {
+  font-size: 16px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.mobileGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+
+.mobileCardsList {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.appCard {
+  padding: 20px;
+  border-radius: 18px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  transition: all 0.2s ease;
+}
+
+.appCard:hover {
+  background: #ffffff;
+  border-color: #035F4F;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -6px rgba(3, 95, 79, 0.1);
+}
+
+.appCardHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.appIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #e6f4f1;
+  color: #035F4F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.appCardTitle {
+  font-size: 16px;
+  font-weight: 750;
+  color: #0f172a;
+  margin: 0;
+}
+
+.appCardDesc {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Smartphone Mockup Preview */
+.phoneMockupWrapper {
+  display: flex;
+  justify-content: center;
+}
+
+.phoneFrame {
+  width: 320px;
+  height: 600px;
+  background: #0f172a;
+  border-radius: 44px;
+  padding: 12px;
+  box-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+}
+
+.phoneScreen {
+  width: 100%;
+  height: 100%;
+  background: #f8fafc;
+  border-radius: 34px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.screenHeader {
+  background: #035F4F;
+  padding: 24px 16px 16px;
+  color: #ffffff;
+}
+
+.screenUserRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.screenAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.screenFlatBadge {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.screenBody {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.screenActionCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── Accounting Section ── */
+.accountingSection {
+  padding: 88px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.accountingGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+
+.accountingVisualCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.06);
+}
+
+.ringWrapper {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 20px;
+}
+
+.ringStats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ringBig {
+  font-size: 26px;
+  font-weight: 850;
+  color: #0f172a;
+}
+
+.ringSub {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.ledgerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.ledgerLabel {
+  font-weight: 600;
+  color: #334155;
+}
+
+.ledgerAmount {
+  font-weight: 800;
+  color: #035F4F;
+}
+
+/* ── Other Features Grid ── */
+.otherFeaturesSection {
+  padding: 88px 24px;
+  background: #ffffff;
+}
+
+.featuresGrid6 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.featureBox {
+  padding: 24px;
+  border-radius: 18px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  transition: all 0.2s ease;
+}
+
+.featureBox:hover {
+  background: #ffffff;
+  border-color: #035F4F;
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px -6px rgba(3, 95, 79, 0.12);
+}
+
+.featureIconCircle {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #e6f4f1;
+  color: #035F4F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  margin-bottom: 14px;
+}
+
+.featureBoxTitle {
+  font-size: 17px;
+  font-weight: 750;
+  color: #0f172a;
+  margin: 0 0 6px;
+}
+
+.featureBoxDesc {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* ── Testimonials Section ── */
+.testimonialsSection {
+  padding: 88px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.testimonialsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.testimonialCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.03);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.starsRow {
+  color: #f59e0b;
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.testimonialQuote {
+  font-size: 14.5px;
+  color: #334155;
+  line-height: 1.6;
+  margin: 0 0 16px;
+  font-style: italic;
+}
+
+.authorRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 14px;
+}
+
+.authorAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e6f4f1;
+  color: #035F4F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.authorName {
+  font-size: 14px;
+  font-weight: 750;
+  color: #0f172a;
+}
+
+.authorRole {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* ── FAQ Section ── */
+.faqSection {
+  padding: 88px 24px;
+  background: #ffffff;
+}
+
+.faqList {
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.faqItem {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.faqItemOpen {
+  background: #ffffff;
+  border-color: #035F4F;
+  box-shadow: 0 6px 18px rgba(3, 95, 79, 0.08);
+}
+
+.faqQuestionBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  font-weight: 750;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.faqAnswer {
+  padding: 0 20px 18px;
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.6;
+}
+
+/* ── Contact Section & Form ── */
+.contactSection {
+  padding: 88px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.contactGrid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 48px;
+  max-width: 1040px;
+  margin: 0 auto;
+  align-items: start;
+}
+
+.contactInfoCard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.contactFormCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  padding: 32px;
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.07);
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.formLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.formInput, .formTextarea {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  color: #0f172a;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  font-family: inherit;
+}
+
+.formInput:focus, .formTextarea:focus {
+  border-color: #035F4F;
+  box-shadow: 0 0 0 3px rgba(3, 95, 79, 0.15);
+}
+
+.formTextarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.btnSubmit {
+  width: 100%;
+  padding: 13px;
+  border-radius: 10px;
+  background: #035F4F;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 750;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnSubmit:hover {
+  background: #02473b;
+  transform: translateY(-1px);
+}
+
+.formSuccess {
+  padding: 12px 16px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+/* ── Footer ── */
+.footer {
+  background: #0f172a;
+  color: #94a3b8;
+  padding: 64px 24px 32px;
+  border-top: 1px solid #1e293b;
+}
+
+.footerContainer {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.footerGrid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 40px;
+  margin-bottom: 48px;
+}
+
+.footerBrandCol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.footerBrandTitle {
+  font-size: 22px;
+  font-weight: 850;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.footerBrandBadge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #F28C28;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.footerDesc {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #94a3b8;
+  max-width: 34ch;
+}
+
+.footerColTitle {
+  font-size: 14px;
+  font-weight: 750;
+  color: #ffffff;
+  margin-bottom: 14px;
+}
+
+.footerLinkList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.footerLink {
+  color: #94a3b8;
+  font-size: 13.5px;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footerLink:hover {
+  color: #ffffff;
+}
+
+.footerBottom {
+  border-top: 1px solid #1e293b;
+  padding-top: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: #64748b;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+@media (max-width: 1024px) {
+  .mobileGrid, .accountingGrid, .contactGrid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .featuresGrid6, .testimonialsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .footerGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .featuresGrid6, .testimonialsGrid {
+    grid-template-columns: 1fr;
+  }
+  .footerGrid {
+    grid-template-columns: 1fr;
+  }
+  .accountingVisualCard, .contactFormCard {
+    padding: 20px;
+  }
+}

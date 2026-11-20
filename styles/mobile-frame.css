@@ -108,10 +108,28 @@
 }
 
 .phone-header-subtitle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-size: 0.75rem;
   color: var(--neutral);
   font-weight: 500;
 }
+
+.phone-header-copy { min-width: 0; flex: 1; }
+.phone-header-society {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: .02em;
+  color: #858d89;
+}
+.phone-header-unit { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 
 /* Sync Status Badge (Guard & Global) */
 .sync-badge {
@@ -184,6 +202,7 @@
 }
 
 .nav-item {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -200,6 +219,60 @@
   font-weight: 500;
   transition: color var(--transition-fast);
   text-decoration: none;
+}
+
+.nav-poll-indicator {
+  position: absolute;
+  top: -36px;
+  right: -5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid #d7e6de;
+  border-radius: 999px;
+  background: #f5faf7;
+  color: var(--pine-dark);
+  box-shadow: 0 3px 10px rgb(15 23 42 / 12%);
+  font-size: 0.625rem;
+  line-height: 1;
+  white-space: nowrap;
+  animation: poll-indicator-in 240ms ease-out both;
+}
+
+.nav-poll-indicator::after {
+  position: absolute;
+  right: 22px;
+  bottom: -4px;
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid #d7e6de;
+  border-bottom: 1px solid #d7e6de;
+  background: #f5faf7;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.nav-item .nav-poll-indicator svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.nav-poll-indicator i {
+  width: 6px;
+  height: 6px;
+  margin-left: 1px;
+  border-radius: 50%;
+  background: #ef3340;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+@keyframes poll-indicator-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .nav-item svg {

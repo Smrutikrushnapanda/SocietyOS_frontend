@@ -1,12 +1,44 @@
-'use client';
-
-import React, { useState, useEffect, useRef } from 'react';
+import { SocietySettingsBootstrap } from '../common/SocietySettings';
+import { VisitorLiveStatus } from '../visitors/VisitorLiveStatus';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GuardHeader } from './GuardHeader';
 import { GuardBottomNav, GuardTabType } from './GuardBottomNav';
 import { GuardScannerScreen } from './GuardScannerScreen';
-import { useVisitorStore, useToastStore } from '../../store';
-import { IconLightning, IconCamera, IconClock, IconCar, IconCheck, IconClose } from '../common/Icons';
+import { usePassClock } from '../../hooks/usePassClock';
+import { isGuardQueueVisitor } from '../../lib/guard-passes';
+import { GuardMobileSelect } from './GuardMobileSelect';
+import { useVisitorStore, useToastStore, useAuthStore, useNoticeStore } from '../../store';
+import { useSocietySettingsStore } from '../../store/useSocietySettingsStore';
+import {
+  IconLightning,
+  IconCamera,
+  IconClock,
+  IconCar,
+  IconCheck,
+  IconClose,
+  IconFlip,
+  IconBuilding,
+  IconDoor,
+  IconQrCode
+} from '../common/Icons';
 import clsx from 'clsx';
+import { getBuildings, BackendBuilding } from '../../lib/api/buildings.api';
+import { getFlats, BackendFlat } from '../../lib/api/flats.api';
+import { parkingApi } from '../../lib/api/parking.api';
+
+// Vehicle plate validation: allows standard Indian numbers e.g. MH02AB1234, DL-01-C-1234, 22BH1234AA
+const isValidPlateNumber = (plate: string): boolean => {
+  const cleaned = plate.replace(/[\s-]/g, '').toUpperCase();
+  const standardRegex = /^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}$/;
+  const bhSeriesRegex = /^[0-9]{2}BH[0-9]{4}[A-Z]{1,2}$/;
+  return standardRegex.test(cleaned) || bhSeriesRegex.test(cleaned);
+};
+
+// 10-digit mobile phone number validation
+const isValidPhoneNumber = (phone: string): boolean => {
+  const digitsOnly = phone.replace(/\D/g, '');
+  return digitsOnly.length === 10 && /^[6-9]\d{9}$/.test(digitsOnly);
+};
 
 interface ParkingBay {
   id: string;
@@ -16,78 +48,358 @@ interface ParkingBay {
   assignedFlat?: string | null;
 }
 
+const GateNoticesStrip: React.FC = () => {
+  const { notices } = useNoticeStore();
+  const publishedNotices = notices.filter((n) => n.status === 'PUBLISHED');
+
+  if (publishedNotices.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {publishedNotices.slice(0, 2).map((notice) => (
+        <div
+          key={notice.id}
+          style={{
+            padding: '8px 12px',
+            background: 'var(--pine-tint)',
+            border: '1px solid rgba(46, 117, 89, 0.25)',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <span style={{ fontSize: '0.8125rem' }}>📢</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ fontSize: '0.75rem', color: 'var(--pine-dark)', display: 'block' }}>
+              {notice.title}
+            </strong>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                color: 'var(--neutral)',
+                display: 'block',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {notice.content || notice.description}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export const GuardApp: React.FC = () => {
-  const { visitors, approveVisitor, denyVisitor, createPreApprovedPass } = useVisitorStore();
+  const {
+    visitors,
+    preApprovedPasses,
+    isLoading,
+    hasLoadedVisitors,
+    error,
+    loadGuardData,
+    approveVisitorVisit,
+    denyVisitorVisit,
+    checkInVisitorVisit,
+    logWalkInVisitor,
+  } = useVisitorStore();
+  const { organizationId } = useAuthStore();
+  const societyAccent = useSocietySettingsStore((state) => state.data?.branding.accent);
+  const guardAccent = societyAccent === 'plum' ? 'plum' : 'blue';
   const { showToast } = useToastStore();
 
   const [currentTab, setCurrentTab] = useState<GuardTabType>('queue');
   const [queueFilter, setQueueFilter] = useState<'all' | 'requested' | 'approved'>('all');
-  const [isOnline, setIsOnline] = useState(true);
-  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    if (tab === 'queue' || tab === 'visitor-entry' || tab === 'vehicle-entry') {
+      const frameId = window.requestAnimationFrame(() => setCurrentTab(tab));
+      return () => window.cancelAnimationFrame(frameId);
+    }
+  }, []);
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      showToast('Live connection verified: Guard terminal online.');
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      showToast('Network disconnected: Guard terminal is online-only.');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [showToast]);
+
+  const { loadNotices } = useNoticeStore();
+
+  // Initial data loading from authoritative backend APIs
+  useEffect(() => {
+    if (organizationId) {
+      loadGuardData();
+      void loadNotices();
+    }
+  }, [organizationId, loadGuardData, loadNotices]);
+
   // Visitor Entry Form State
-  const [purpose, setPurpose] = useState('Delivery');
-  const [selectedTower, setSelectedTower] = useState('tower-a');
-  const [entryFlat, setEntryFlat] = useState('A-101');
+  const [purpose, setPurpose] = useState('Other');
+  const [entryFlatId, setEntryFlatId] = useState<string>('');
   const [entryName, setEntryName] = useState('');
   const [entryPhone, setEntryPhone] = useState('');
   const [entryVehicle, setEntryVehicle] = useState('');
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
-  const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
+  const [cameraModalMode, setCameraModalMode] = useState<'visitor-photo' | 'plate-scan' | null>(null);
+  const [plateScanDraft, setPlateScanDraft] = useState('');
+  const [plateSnapshotUrl, setPlateSnapshotUrl] = useState<string | null>(null);
 
   // Video Ref for Snapshot Camera Modal
   const photoVideoRef = useRef<HTMLVideoElement | null>(null);
   const photoStreamRef = useRef<MediaStream | null>(null);
+  const photoFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [photoCameraActive, setPhotoCameraActive] = useState(false);
+  const [photoCameraError, setPhotoCameraError] = useState<string | null>(null);
+  const [photoFacingMode, setPhotoFacingMode] = useState<'environment' | 'user'>('environment');
+  const [photoTorchOn, setPhotoTorchOn] = useState(false);
+  const [isScreenFlashBurst, setIsScreenFlashBurst] = useState(false);
+
+  const stopPhotoStream = useCallback(() => {
+    if (photoFlashTimerRef.current) {
+      clearTimeout(photoFlashTimerRef.current);
+      photoFlashTimerRef.current = null;
+    }
+    if (photoStreamRef.current) {
+      photoStreamRef.current.getTracks().forEach((track) => track.stop());
+      photoStreamRef.current = null;
+    }
+  }, []);
+
+  const openCameraModal = (mode: 'visitor-photo' | 'plate-scan') => {
+    setPhotoCameraError(null);
+    setPhotoTorchOn(false);
+    setIsScreenFlashBurst(false);
+    setPhotoFacingMode('environment');
+    if (mode === 'plate-scan') {
+      setPlateScanDraft(entryVehicle);
+      setPlateSnapshotUrl(null);
+    }
+    setCameraModalMode(mode);
+  };
+
+  const closePhotoModal = () => {
+    stopPhotoStream();
+    setPhotoCameraActive(false);
+    setPhotoCameraError(null);
+    setPhotoTorchOn(false);
+    setIsScreenFlashBurst(false);
+    setPlateSnapshotUrl(null);
+    setCameraModalMode(null);
+  };
+
+  const togglePhotoFacing = () => {
+    setPhotoTorchOn(false);
+    setIsScreenFlashBurst(false);
+    if (cameraModalMode === 'plate-scan' && plateSnapshotUrl) {
+      setPlateSnapshotUrl(null);
+    }
+    setPhotoFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
+  };
+
+  const togglePhotoTorch = async () => {
+    if (photoFacingMode === 'user') {
+      setPhotoTorchOn((prev) => !prev);
+      return;
+    }
+    if (cameraModalMode === 'plate-scan' && plateSnapshotUrl) {
+      showToast('Tap Retake to toggle rear flash on live camera.', 'info');
+      return;
+    }
+    if (!photoStreamRef.current) {
+      showToast('Camera feed unavailable for flash control.', 'info');
+      return;
+    }
+    const track = photoStreamRef.current.getVideoTracks()[0];
+    if (!track) {
+      showToast('Flash / Torch not available on this camera hardware.', 'info');
+      return;
+    }
+    try {
+      const capabilities =
+        (track.getCapabilities && (track.getCapabilities() as { torch?: boolean })) || {};
+      if (capabilities.torch) {
+        const nextTorch = !photoTorchOn;
+        await (track as MediaStreamTrack & { applyConstraints: (c: unknown) => Promise<void> }).applyConstraints({
+          advanced: [{ torch: nextTorch }],
+        });
+        setPhotoTorchOn(nextTorch);
+      } else {
+        showToast('Flash / Torch not available on this camera hardware.', 'info');
+      }
+    } catch {
+      showToast('Flash / Torch toggle not supported on this device.', 'info');
+    }
+  };
+
+  // Buildings & Flats state for dynamic Tower -> Flat selection
+  const [buildings, setBuildings] = useState<BackendBuilding[]>([]);
+  const [flats, setFlats] = useState<BackendFlat[]>([]);
+  const [selectedTower, setSelectedTower] = useState<string>('');
+
+  // Load authoritative towers and flats for visitor entry
+  useEffect(() => {
+    async function loadTowersAndFlats() {
+      if (!organizationId) return;
+      try {
+        const [bldgs, flts] = await Promise.all([
+          getBuildings().catch(() => []),
+          getFlats().catch(() => [])
+        ]);
+
+        const validBldgs = Array.isArray(bldgs) && bldgs.length > 0
+          ? bldgs
+          : [
+              { id: 'tower-a', name: 'Tower A', organization_id: organizationId, isActive: true },
+              { id: 'tower-b', name: 'Tower B', organization_id: organizationId, isActive: true },
+              { id: 'tower-c', name: 'Tower C', organization_id: organizationId, isActive: true }
+            ];
+        setBuildings(validBldgs);
+        setSelectedTower(validBldgs[0].id);
+
+        const validFlats = Array.isArray(flts) && flts.length > 0
+          ? flts
+          : [
+              { id: '101', flat_identifier: '101', building_id: 'tower-a', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '102', flat_identifier: '102', building_id: 'tower-a', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '201', flat_identifier: '201', building_id: 'tower-a', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '202', flat_identifier: '202', building_id: 'tower-a', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '301', flat_identifier: '301', building_id: 'tower-a', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '101B', flat_identifier: '101', building_id: 'tower-b', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '102B', flat_identifier: '102', building_id: 'tower-b', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '201B', flat_identifier: '201', building_id: 'tower-b', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '101C', flat_identifier: '101', building_id: 'tower-c', organization_id: organizationId, floor_id: '', isActive: true },
+              { id: '102C', flat_identifier: '102', building_id: 'tower-c', organization_id: organizationId, floor_id: '', isActive: true }
+            ];
+        setFlats(validFlats);
+
+        const firstTowerFlats = validFlats.filter((f) => f.building_id === validBldgs[0].id);
+        if (firstTowerFlats.length > 0) {
+          setEntryFlatId(firstTowerFlats[0].flat_identifier);
+        }
+      } catch {
+        // Fallback handled cleanly
+      }
+    }
+    void loadTowersAndFlats();
+  }, [organizationId]);
+
+  // Derived available flats for currently selected tower
+  const availableFlatsForTower = React.useMemo(() => {
+    if (!selectedTower) return flats;
+    return flats.filter((f) => f.building_id === selectedTower);
+  }, [flats, selectedTower]);
 
   // Parking Bays State
   const [selectedZone, setSelectedZone] = useState<'A' | 'B'>('A');
   const [selectedBay, setSelectedBay] = useState<string | null>(null);
   const [vehiclePlate, setVehiclePlate] = useState('');
-  const [parkingBays, setParkingBays] = useState<ParkingBay[]>([
-    { id: 'A-01', zone: 'A', status: 'occupied', vehicle: 'MH-02-CB-4491' },
-    { id: 'A-02', zone: 'A', status: 'occupied', vehicle: 'MH-02-AK-9920' },
-    { id: 'A-03', zone: 'A', status: 'reserved', vehicle: 'Reserved (EV)' },
-    { id: 'A-04', zone: 'A', status: 'free' },
-    { id: 'A-05', zone: 'A', status: 'occupied', vehicle: 'MH-02-EF-1029' },
-    { id: 'A-06', zone: 'A', status: 'occupied', vehicle: 'MH-02-ZA-5512' },
-    { id: 'A-07', zone: 'A', status: 'free' },
-    { id: 'A-08', zone: 'A', status: 'occupied', vehicle: 'MH-02-QW-8819' },
-    { id: 'A-09', zone: 'A', status: 'reserved', vehicle: 'MH-02-AA-0001' },
-    { id: 'A-10', zone: 'A', status: 'occupied', vehicle: 'MH-02-BN-3341' },
-    { id: 'A-11', zone: 'A', status: 'occupied', vehicle: 'MH-02-PL-7712' },
-    { id: 'A-12', zone: 'A', status: 'free' },
-    { id: 'B-01', zone: 'B', status: 'occupied', vehicle: 'MH-02-DR-9011' },
-    { id: 'B-02', zone: 'B', status: 'occupied', vehicle: 'MH-02-WE-3412' },
-    { id: 'B-03', zone: 'B', status: 'free' },
-    { id: 'B-04', zone: 'B', status: 'occupied', vehicle: 'MH-02-CV-7819' },
-    { id: 'B-05', zone: 'B', status: 'reserved', vehicle: 'MH-02-VIP-9' },
-    { id: 'B-06', zone: 'B', status: 'occupied', vehicle: 'MH-02-PO-1188' },
-    { id: 'B-07', zone: 'B', status: 'occupied', vehicle: 'MH-02-LK-9022' },
-    { id: 'B-08', zone: 'B', status: 'free' },
-    { id: 'B-09', zone: 'B', status: 'occupied', vehicle: 'MH-02-MN-6754' },
-    { id: 'B-10', zone: 'B', status: 'occupied', vehicle: 'MH-02-RE-2231' },
-    { id: 'B-11', zone: 'B', status: 'free' }
-  ]);
+  const [selectedVehicleOption, setSelectedVehicleOption] = useState<string>('');
+  // Parking Bays State (dynamic - strictly Visitor / Common bays)
+  const [parkingBays, setParkingBays] = useState<ParkingBay[]>([]);
+
+  // Dynamic Visitor / Common parking slots loading (no resident flats occupied)
+  useEffect(() => {
+    async function loadVisitorParkingSlots() {
+      if (!organizationId) return;
+      try {
+        const slots = await parkingApi.getParkingSlots().catch(() => []);
+        if (Array.isArray(slots) && slots.length > 0) {
+          // Filter to only visitor/common slots (no assigned flat_id)
+          const visitorSlots = slots.filter((s) => !s.flat_id);
+          const activeList = visitorSlots.length > 0 ? visitorSlots : slots.slice(0, 10);
+          const mapped: ParkingBay[] = activeList.map((s) => ({
+            id: s.slot_number,
+            zone: (s.zone?.toUpperCase().includes('B') ? 'B' : 'A') as 'A' | 'B',
+            status: s.status === 'AVAILABLE' ? 'free' : 'occupied',
+            vehicle: null,
+            assignedFlat: null
+          }));
+          setParkingBays(mapped);
+          return;
+        }
+      } catch {}
+
+      // Default dynamic Visitor / Common bays (no flat occupied bays)
+      setParkingBays([
+        { id: 'V-01', zone: 'A', status: 'free' },
+        { id: 'V-02', zone: 'A', status: 'free' },
+        { id: 'V-03', zone: 'A', status: 'free' },
+        { id: 'V-04', zone: 'A', status: 'free' },
+        { id: 'V-05', zone: 'A', status: 'free' },
+        { id: 'V-06', zone: 'A', status: 'free' },
+        { id: 'V-07', zone: 'B', status: 'free' },
+        { id: 'V-08', zone: 'B', status: 'free' },
+        { id: 'V-09', zone: 'B', status: 'free' },
+        { id: 'V-10', zone: 'B', status: 'free' },
+      ]);
+    }
+    void loadVisitorParkingSlots();
+  }, [organizationId]);
+
+  // Extract recent scanned / entry vehicle plates from visitors and pre-approved passes
+  const recentScannedVehicles = React.useMemo(() => {
+    const map = new Map<string, { plate: string; label: string }>();
+
+    visitors.forEach((v) => {
+      if (v.vehicleNo && v.vehicleNo.trim()) {
+        const p = v.vehicleNo.trim().toUpperCase();
+        if (!map.has(p)) {
+          map.set(p, { plate: p, label: `${p} — ${v.name} (Flat ${v.flat})` });
+        }
+      }
+    });
+
+    preApprovedPasses.forEach((p) => {
+      if (p.vehicleNo && p.vehicleNo.trim()) {
+        const pl = p.vehicleNo.trim().toUpperCase();
+        if (!map.has(pl)) {
+          map.set(pl, { plate: pl, label: `${pl} — ${p.guestName} (Flat ${p.flat})` });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [visitors, preApprovedPasses]);
 
   // Snapshot Camera Lifecycle
   useEffect(() => {
-    if (!isPhotoModalOpen) {
-      if (photoStreamRef.current) {
-        photoStreamRef.current.getTracks().forEach((track) => track.stop());
-        photoStreamRef.current = null;
-      }
-      setPhotoCameraActive(false);
+    if (!cameraModalMode || (cameraModalMode === 'plate-scan' && plateSnapshotUrl)) {
+      stopPhotoStream();
       return;
     }
 
     let isMounted = true;
     async function startPhotoCamera() {
+      stopPhotoStream();
       try {
+        if (!navigator?.mediaDevices?.getUserMedia) {
+          throw new Error('Camera API not supported on this browser.');
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
+          video: { facingMode: { ideal: photoFacingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
         });
         if (!isMounted) {
           stream.getTracks().forEach((t) => t.stop());
@@ -99,46 +411,89 @@ export const GuardApp: React.FC = () => {
           photoVideoRef.current.play().catch(() => {});
         }
         setPhotoCameraActive(true);
-      } catch (err) {
-        setPhotoCameraActive(false);
+        setPhotoCameraError(null);
+      } catch (err: unknown) {
+        if (isMounted) {
+          setPhotoCameraActive(false);
+          setPhotoCameraError(
+            err instanceof Error ? err.message : 'Unable to access camera.',
+          );
+        }
       }
     }
 
-    startPhotoCamera();
+    void startPhotoCamera();
 
     return () => {
       isMounted = false;
-      if (photoStreamRef.current) {
-        photoStreamRef.current.getTracks().forEach((track) => track.stop());
-        photoStreamRef.current = null;
-      }
+      stopPhotoStream();
     };
-  }, [isPhotoModalOpen]);
+  }, [cameraModalMode, plateSnapshotUrl, photoFacingMode, stopPhotoStream]);
 
-  const capturePhotoSnapshot = () => {
-    if (photoVideoRef.current) {
+  const takePhotoFrame = () => {
+    if (photoVideoRef.current && photoVideoRef.current.videoWidth > 0) {
       const video = photoVideoRef.current;
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth || 400;
       canvas.height = video.videoHeight || 300;
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        if (photoFacingMode === 'user') {
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+        }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        if (cameraModalMode === 'plate-scan') {
+          stopPhotoStream();
+          setPhotoCameraActive(false);
+          setPlateSnapshotUrl(dataUrl);
+          showToast('Plate frame captured. Confirm or enter plate number below.', 'info');
+          return;
+        }
         setPhotoDataUrl(dataUrl);
+        closePhotoModal();
+        showToast('Visitor facial snapshot captured & timestamped.');
+        return;
       }
-    } else {
-      setPhotoDataUrl('/assets/visitor_avatar.png');
     }
-    setIsPhotoModalOpen(false);
-    showToast('Visitor facial snapshot captured & timestamped!');
+    showToast('Camera feed unavailable. Please ensure camera permissions are granted.', 'error');
+    if (cameraModalMode !== 'plate-scan') {
+      closePhotoModal();
+    }
   };
 
-  const activeVisitors = visitors.filter(
-    (v) => v.status === 'requested' || v.status === 'approved'
-  );
-  const requestedVisitors = visitors.filter((v) => v.status === 'requested');
-  const approvedVisitors = visitors.filter((v) => v.status === 'approved');
+  const handleApplyPlateScan = () => {
+    const formatted = plateScanDraft.trim().toUpperCase();
+    if (!formatted) {
+      showToast('Enter or scan a vehicle plate number to apply.', 'error');
+      return;
+    }
+    setEntryVehicle(formatted);
+    closePhotoModal();
+    showToast(`Plate ${formatted} added to visitor entry.`);
+  };
+
+  const capturePhotoSnapshot = () => {
+    if (photoFacingMode === 'user' && photoTorchOn) {
+      if (photoFlashTimerRef.current) {
+        clearTimeout(photoFlashTimerRef.current);
+      }
+      setIsScreenFlashBurst(true);
+      photoFlashTimerRef.current = setTimeout(() => {
+        photoFlashTimerRef.current = null;
+        setIsScreenFlashBurst(false);
+        takePhotoFrame();
+      }, 160);
+      return;
+    }
+    takePhotoFrame();
+  };
+
+  const queueNow = usePassClock(visitors.flatMap(visitor => [visitor.validityStart, visitor.validityEnd]));
+  const activeVisitors = visitors.filter(visitor => isGuardQueueVisitor(visitor, queueNow));
+  const requestedVisitors = activeVisitors.filter(visitor => visitor.status === 'requested');
+  const approvedVisitors = activeVisitors.filter(visitor => visitor.status === 'approved');
 
   const filteredVisitors =
     queueFilter === 'requested'
@@ -147,99 +502,142 @@ export const GuardApp: React.FC = () => {
       ? approvedVisitors
       : activeVisitors;
 
-  const toggleSync = () => {
-    if (isOnline) {
-      setIsOnline(false);
-      setPendingSyncCount((prev) => (prev === 0 ? 1 : prev));
-      showToast('Switched to Offline Mode (Simulated).');
-    } else {
-      const count = pendingSyncCount;
-      setIsOnline(true);
-      setPendingSyncCount(0);
-      showToast(
-        count > 0
-          ? `Auto-synced ${count} local transactions to Cloud API.`
-          : 'Live connection verified.'
-      );
+  const handleApprove = async (id: string, name: string) => {
+    if (!isOnline) {
+      showToast('Guard terminal is online-only. Active internet connection required.');
+      return;
+    }
+    try {
+      await approveVisitorVisit(id);
+      showToast(`Entry approved for ${name}! Ready for Gate Check-in.`);
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Failed to approve visit');
     }
   };
 
-  const handleApprove = (id: string, name: string) => {
-    approveVisitor(id);
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Entry approved for ${name}! Ready for Gate Check-in.`);
+  const handleDeny = async (id: string, name: string) => {
+    if (!isOnline) {
+      showToast('Guard terminal is online-only. Active internet connection required.');
+      return;
+    }
+    try {
+      await denyVisitorVisit(id);
+      showToast(`Visitor ${name} turned away at gate.`);
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Failed to deny visit');
+    }
   };
 
-  const handleDeny = (id: string, name: string) => {
-    denyVisitor(id);
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Visitor ${name} turned away at gate.`);
+  const handleCheckIn = async (id: string, name: string) => {
+    if (!isOnline) {
+      showToast('Guard terminal is online-only. Active internet connection required.');
+      return;
+    }
+    try {
+      await checkInVisitorVisit(id);
+      showToast(`${name} checked in.`);
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Failed to check in visit', 'error');
+    }
   };
 
-  const handleCheckIn = (id: string, name: string) => {
-    approveVisitor(id);
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Boom barrier opened! ${name} checked in.`);
-  };
-
-  const handleConfirmPreApprovedEntry = (
-    passCode: string,
-    vehicleNo: string,
-    gateName: string
+  const handleConfirmPreApprovedEntry = async (
+    visitId: string,
+    token: string,
+    _vehicleNo: string,
+    _gateName: string
   ) => {
+    if (!isOnline) throw new Error('Guard terminal is online-only. Active internet connection required.');
+    await checkInVisitorVisit(visitId, token);
     setIsScannerOpen(false);
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Boom Barrier Opened! Entry logged for Pass ${passCode}. WhatsApp sync sent.`);
+    showToast('Guest entry recorded.', 'success');
     setCurrentTab('queue');
   };
 
-  const handleSubmitVisitorEntry = (e: React.FormEvent) => {
+  const handleSubmitVisitorEntry = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isOnline) {
+      showToast('Offline: Network connection required to log visitor entry.');
+      return;
+    }
     if (!entryName.trim()) {
-      alert('Please enter visitor name');
+      showToast('Please enter visitor name');
+      return;
+    }
+    if (!selectedTower) {
+      showToast('Please select a Tower / Building');
+      return;
+    }
+    if (!entryFlatId) {
+      showToast('Please select a destination flat');
+      return;
+    }
+    if (entryPhone.trim() && !isValidPhoneNumber(entryPhone.trim())) {
+      showToast('Please enter a valid 10-digit phone number (e.g. 9820012345)');
+      return;
+    }
+    if (entryVehicle.trim() && !isValidPlateNumber(entryVehicle.trim())) {
+      showToast('Please enter a valid vehicle plate number (e.g. MH02AB1234)');
       return;
     }
 
-    createPreApprovedPass({
-      guestName: entryName.trim(),
-      phone: entryPhone.trim() || '+91 98000 00000',
-      purpose,
-      flat: entryFlat,
-      vehicleNo: entryVehicle.trim() || null
-    });
+    try {
+      const towerObj = buildings.find((b) => b.id === selectedTower);
+      const towerLabel = towerObj ? towerObj.name : '';
+      const flatLabel = towerLabel ? `${towerLabel} - Flat ${entryFlatId}` : `Flat ${entryFlatId}`;
 
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Visitor entry logged! WhatsApp approval request sent to Flat ${entryFlat}.`);
+      await logWalkInVisitor({
+        name: entryName.trim(),
+        phone: entryPhone.trim() || '0000000000',
+        purpose,
+        flat: flatLabel,
+        vehicleNo: entryVehicle.trim().toUpperCase() || null
+      });
 
-    setEntryName('');
-    setEntryPhone('');
-    setEntryVehicle('');
-    setPhotoDataUrl(null);
-    setQueueFilter('all');
-    setCurrentTab('queue');
+      showToast(`Visitor entry logged! Request sent for ${flatLabel}.`);
+
+      setPurpose('Other');
+      setEntryName('');
+      setEntryPhone('');
+      setEntryVehicle('');
+      setPhotoDataUrl(null);
+      setQueueFilter('all');
+      setCurrentTab('queue');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Failed to log visitor entry');
+    }
   };
 
   const handleConfirmPark = () => {
-    if (!vehiclePlate.trim()) {
-      alert('Please enter vehicle registration number plate');
+    const finalPlate = vehiclePlate.trim().toUpperCase();
+    if (!finalPlate) {
+      showToast('Please select or enter vehicle registration plate');
+      return;
+    }
+    if (!isValidPlateNumber(finalPlate)) {
+      showToast('Please enter a valid vehicle registration plate (e.g. MH02AB1234)');
       return;
     }
     if (!selectedBay) {
-      alert('Please tap a free green parking bay above');
+      showToast('Please tap an available green parking bay above');
       return;
     }
 
     setParkingBays((prev) =>
       prev.map((b) =>
         b.id === selectedBay
-          ? { ...b, status: 'occupied', vehicle: vehiclePlate.trim().toUpperCase() }
+          ? { ...b, status: 'occupied', vehicle: finalPlate }
           : b
       )
     );
 
-    if (!isOnline) setPendingSyncCount((p) => p + 1);
-    showToast(`Vehicle ${vehiclePlate.toUpperCase()} assigned to Bay ${selectedBay}. Barrier opened.`);
+    if (!isOnline) {
+      showToast('Offline: Network connection required to record parking assignment.');
+      return;
+    }
+    showToast(`Vehicle ${finalPlate} assigned to Bay ${selectedBay}. Barrier opened.`);
     setVehiclePlate('');
+    setSelectedVehicleOption('');
     setSelectedBay(null);
   };
 
@@ -248,15 +646,27 @@ export const GuardApp: React.FC = () => {
 
   if (isScannerOpen) {
     return (
-      <GuardScannerScreen
-        onBack={() => setIsScannerOpen(false)}
-        onConfirmEntry={handleConfirmPreApprovedEntry}
-      />
+      <div
+        className="guard-portal-scope"
+        data-guard-accent={guardAccent}
+        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+      >
+        <GuardScannerScreen
+          onBack={() => setIsScannerOpen(false)}
+          onConfirmEntry={handleConfirmPreApprovedEntry}
+        />
+      </div>
     );
   }
 
   return (
-    <>
+    <div
+      className="guard-portal-scope"
+      data-guard-accent={guardAccent}
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+    >
+      <SocietySettingsBootstrap />
+      <VisitorLiveStatus silent />
       <GuardHeader
         title={
           currentTab === 'queue'
@@ -267,37 +677,88 @@ export const GuardApp: React.FC = () => {
         }
         queueCount={activeVisitors.length}
         isOnline={isOnline}
-        pendingSyncCount={pendingSyncCount}
-        onToggleSync={toggleSync}
+        onOpenVisitorEntry={() => setCurrentTab('visitor-entry')}
       />
 
       <main className="phone-body" style={{ paddingTop: 'var(--space-3)' }}>
+        {!organizationId && (
+          <div
+            className="card"
+            style={{
+              padding: '12px 14px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid var(--danger)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '12px',
+            }}
+          >
+            <strong style={{ color: 'var(--danger)', fontSize: '0.8125rem', display: 'block' }}>
+              Organization Context Required
+            </strong>
+            <span style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>
+              Please select an organization to view visitors and log gate entries.
+            </span>
+          </div>
+        )}
+
+        {error && (
+          <div
+            className="card"
+            style={{
+              padding: '12px 14px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid var(--danger)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '12px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <div>
+              <strong style={{ color: 'var(--danger)', fontSize: '0.8125rem', display: 'block' }}>
+                Error Loading Gate Data
+              </strong>
+              <span style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>{error}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline"
+              style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+              onClick={() => loadGuardData()}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* 1. QUEUE TAB */}
         {currentTab === 'queue' && (
           <div className="guard-screen active" id="screen-queue">
+            {/* Gate Broadcast Notices from Admin / Society */}
+            <GateNoticesStrip />
+
             {/* FastPass Quick Scan Banner */}
-            <div
+            <button
+              type="button"
               className="fastpass-quick-scan-strip"
               onClick={() => setIsScannerOpen(true)}
             >
               <div className="fastpass-scan-content">
-                <div className="fastpass-scan-icon">
-                  <IconLightning size={18} />
+                <div className="fastpass-scan-icon" aria-hidden="true">
+                  <IconQrCode size={20} />
                 </div>
-                <div>
+                <div className="fastpass-scan-copy">
+                  <span className="fastpass-scan-eyebrow">FASTPASS GATE ENTRY</span>
                   <strong>Scan Resident Pre-Approved QR</strong>
-                  <span>1-tap auto-verified entry · Auto-populates guest details</span>
+                  <span className="fastpass-scan-sub">Instant verification &amp; 1-tap check-in</span>
                 </div>
               </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-accent"
-                style={{ padding: '6px 12px', fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-              >
+              <span className="fastpass-scan-cta">
                 <IconCamera size={14} />
-                <span>Scan QR</span>
-              </button>
-            </div>
+                <span>Scan</span>
+              </span>
+            </button>
 
             {/* Filter Pills */}
             <div className="guard-filter-strip">
@@ -331,7 +792,12 @@ export const GuardApp: React.FC = () => {
             </div>
 
             <div id="guard-queue-list">
-              {filteredVisitors.length === 0 ? (
+              {isLoading && !hasLoadedVisitors && filteredVisitors.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-title">Loading Gate Queue...</div>
+                  <div className="empty-state-desc">Fetching visitor requests for your terminal.</div>
+                </div>
+              ) : filteredVisitors.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-state-title">No Visitors in this View</div>
                   <div className="empty-state-desc">Queue is clear for the selected filter.</div>
@@ -442,6 +908,18 @@ export const GuardApp: React.FC = () => {
             <div className="purpose-select-grid">
               {[
                 {
+                  id: 'Other',
+                  label: 'Other',
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <circle cx="8.5" cy="12" r="0.75" />
+                      <circle cx="12" cy="12" r="0.75" />
+                      <circle cx="15.5" cy="12" r="0.75" />
+                    </svg>
+                  )
+                },
+                {
                   id: 'Delivery',
                   label: 'Delivery',
                   icon: (
@@ -505,7 +983,7 @@ export const GuardApp: React.FC = () => {
                 backgroundSize: 'cover',
                 backgroundPosition: 'center'
               }}
-              onClick={() => setIsPhotoModalOpen(true)}
+              onClick={() => openCameraModal('visitor-photo')}
             >
               {!photoDataUrl && <div className="scanner-reticle"></div>}
               {!photoDataUrl && (
@@ -524,7 +1002,7 @@ export const GuardApp: React.FC = () => {
               )}
               <span className="scanner-text" style={{ background: photoDataUrl ? 'rgba(0,0,0,0.6)' : undefined, padding: '4px 8px', borderRadius: '4px' }}>
                 {photoDataUrl ? (
-                  <span style={{ color: '#25d366', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span className="guard-photo-captured">
                     <IconCheck size={14} /> Photo Captured (Tap to Retake)
                   </span>
                 ) : (
@@ -533,54 +1011,7 @@ export const GuardApp: React.FC = () => {
               </span>
             </div>
 
-            {/* Destination Tower & Flat */}
-            <div className="form-group">
-              <label className="form-label">Destination Tower & Flat *</label>
-              <div className="flat-tower-pills">
-                {['tower-a', 'tower-b', 'tower-c'].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    className={clsx('tower-pill', selectedTower === t && 'active')}
-                    onClick={() => {
-                      setSelectedTower(t);
-                      setEntryFlat(t === 'tower-a' ? 'A-101' : t === 'tower-b' ? 'B-101' : 'C-101');
-                    }}
-                  >
-                    {t === 'tower-a' ? 'Tower A' : t === 'tower-b' ? 'Tower B' : 'Tower C'}
-                  </button>
-                ))}
-              </div>
-              <select
-                className="select"
-                value={entryFlat}
-                onChange={(e) => setEntryFlat(e.target.value)}
-              >
-                {selectedTower === 'tower-a' && (
-                  <>
-                    <option value="A-101">Flat A-101 — Aarav Sharma (3 BHK)</option>
-                    <option value="A-102">Flat A-102 — Priya Mukherjee (2 BHK)</option>
-                    <option value="A-103">Flat A-103 — Ramesh Patel (3 BHK)</option>
-                    <option value="A-201">Flat A-201 — Deepak Verma (3 BHK)</option>
-                  </>
-                )}
-                {selectedTower === 'tower-b' && (
-                  <>
-                    <option value="B-101">Flat B-101 — Vikas Dubey (3 BHK)</option>
-                    <option value="B-201">Flat B-201 — Gautam Singhania (3 BHK)</option>
-                    <option value="B-202">Flat B-202 — Isha Mehra (2 BHK)</option>
-                  </>
-                )}
-                {selectedTower === 'tower-c' && (
-                  <>
-                    <option value="C-101">Flat C-101 — Amitav Ghosh (2 BHK)</option>
-                    <option value="C-301">Flat C-301 — Shahid Kapoor (2 BHK)</option>
-                    <option value="C-401">Flat C-401 — Ayushmann Khurrana (3 BHK)</option>
-                  </>
-                )}
-              </select>
-            </div>
-
+            {/* 1. Visitor Full Name * */}
             <div className="form-group">
               <label className="form-label">Visitor Full Name *</label>
               <input
@@ -591,31 +1022,115 @@ export const GuardApp: React.FC = () => {
               />
             </div>
 
+            {/* 2. Tower / Building * */}
+            <div className="form-group">
+              <label className="form-label">Tower / Building *</label>
+              <GuardMobileSelect
+                id="guard-entry-tower"
+                sheetTitle="Select Tower / Building"
+                placeholder="Select Tower"
+                value={selectedTower}
+                leadingIcon={<IconBuilding size={15} />}
+                countLabel={`${buildings.length} ${buildings.length === 1 ? 'Tower' : 'Towers'}`}
+                options={buildings.map((b) => ({
+                  value: b.id,
+                  label: b.name,
+                  subtitle: b.code ? `Code: ${b.code}` : 'Residential Tower',
+                  icon: <IconBuilding size={16} />,
+                }))}
+                onChange={(newTower) => {
+                  setSelectedTower(newTower);
+                  const matching = flats.filter((f) => f.building_id === newTower);
+                  setEntryFlatId(matching.length > 0 ? matching[0].flat_identifier : '');
+                }}
+              />
+            </div>
+
+            {/* 3. Destination Flat According to Tower * */}
+            <div className="form-group">
+              <label className="form-label">Destination Flat *</label>
+              <GuardMobileSelect
+                id="guard-entry-flat"
+                sheetTitle="Select Destination Flat"
+                placeholder={selectedTower ? 'Select Flat' : 'Select Tower First'}
+                value={entryFlatId}
+                disabled={!selectedTower}
+                leadingIcon={<IconDoor size={15} />}
+                countLabel={`${availableFlatsForTower.length} ${availableFlatsForTower.length === 1 ? 'Flat' : 'Flats'}`}
+                emptyMessage="No flats configured for this tower"
+                options={availableFlatsForTower.map((fl) => ({
+                  value: fl.flat_identifier,
+                  label: `Flat ${fl.flat_identifier}`,
+                  subtitle: fl.flat_type || undefined,
+                  icon: <IconDoor size={16} />,
+                }))}
+                onChange={(val) => setEntryFlatId(val)}
+              />
+            </div>
+
+            {/* 4. Phone Number (Optional) with 10-digit validation */}
             <div className="form-group">
               <label className="form-label">Phone Number (Optional)</label>
               <input
                 className="input"
-                placeholder="e.g. +91 98200 12345"
+                type="tel"
+                placeholder="e.g. 9820012345 (10-digit mobile)"
+                maxLength={10}
                 value={entryPhone}
-                onChange={(e) => setEntryPhone(e.target.value)}
+                onChange={(e) => setEntryPhone(e.target.value.replace(/\D/g, ''))}
               />
+              {entryPhone.length > 0 && entryPhone.length < 10 && (
+                <span style={{ fontSize: '0.72rem', color: 'var(--danger)', marginTop: '3px', display: 'block' }}>
+                  Please enter 10 digits ({entryPhone.length}/10 entered)
+                </span>
+              )}
             </div>
 
+            {/* 5. Vehicle Plate Number (if any) with validation & Scan trigger */}
             <div className="form-group">
-              <label className="form-label">Vehicle Plate Number (if any)</label>
+              <label className="form-label" htmlFor="guard-entry-vehicle">
+                Vehicle Plate Number (if any)
+              </label>
               <input
+                id="guard-entry-vehicle"
                 className="input"
-                placeholder="e.g. MH-02-AB-1234"
+                placeholder="e.g. MH02AB1234"
                 style={{ textTransform: 'uppercase' }}
                 value={entryVehicle}
-                onChange={(e) => setEntryVehicle(e.target.value)}
+                onChange={(e) => setEntryVehicle(e.target.value.toUpperCase())}
               />
+              <span style={{ fontSize: '0.72rem', color: 'var(--neutral)', marginTop: '3px', display: 'block' }}>
+                Format: State Code + District + Series + Number (e.g. MH02AB1234)
+              </span>
+              <button
+                type="button"
+                id="guard-scan-plate-btn"
+                className="guard-plate-scan-btn"
+                onClick={() => openCameraModal('plate-scan')}
+              >
+                <span className="guard-plate-scan-icon" aria-hidden="true">
+                  <IconCamera size={16} />
+                </span>
+                <span className="guard-plate-scan-copy">
+                  <strong>Scan Number Plate</strong>
+                  <span>Open plate camera &amp; fill plate input</span>
+                </span>
+                <span className="guard-plate-scan-pill">SCAN</span>
+              </button>
             </div>
 
             <button
               type="button"
               className="btn btn-primary"
-              style={{ width: '100%', marginTop: '4px', padding: '12px' }}
+              style={{
+                width: '100%',
+                marginTop: '4px',
+                padding: '12px',
+                background: 'linear-gradient(135deg, #0284c7 0%, #0f4c81 100%)',
+                borderColor: '#0f4c81',
+                color: '#ffffff',
+                boxShadow: '0 3px 10px rgba(15, 76, 129, 0.35)',
+              }}
               onClick={handleSubmitVisitorEntry}
             >
               Dispatch WhatsApp Approval Request →
@@ -645,7 +1160,7 @@ export const GuardApp: React.FC = () => {
             </div>
 
             <span className="form-label" style={{ marginBottom: '6px' }}>
-              Tap Available Green Bay to Assign
+              Tap Available Bay to Assign
             </span>
             <div className="tactile-bay-grid">
               {parkingBays
@@ -673,47 +1188,80 @@ export const GuardApp: React.FC = () => {
             </div>
 
             {/* Selected Bay Summary */}
-            <div className="barrier-summary-card">
-              <div>
-                <span
-                  style={{
-                    fontSize: '0.6875rem',
-                    color: 'var(--neutral)',
-                    fontWeight: 600,
-                    textTransform: 'uppercase'
-                  }}
-                >
-                  Selected Parking Bay
-                </span>
-                <div
-                  style={{
-                    fontFamily: 'var(--font-heading)',
-                    fontSize: '1.15rem',
-                    fontWeight: 700,
-                    color: 'var(--pine-dark)'
-                  }}
-                >
-                  {selectedBay ? `Bay ${selectedBay}` : 'None Selected'}
-                </div>
+            <div className="barrier-summary-card" role="status" aria-live="polite">
+              <span className="parking-summary-icon" aria-hidden="true"><IconCar size={19} /></span>
+              <div className="parking-summary-copy">
+                <span>Selected Parking Bay</span>
+                <strong>{selectedBay ? `Bay ${selectedBay}` : 'None Selected'}</strong>
               </div>
-              <span className="badge badge-pine">
-                {selectedBay ? `Zone ${selectedZone} • Available` : 'Visitor Bay'}
+              <span className="parking-summary-zone">
+                {selectedBay ? `Zone ${selectedZone}` : 'Visitor / common'}
               </span>
             </div>
 
             <div className="form-group">
               <label className="form-label">Vehicle Registration Plate *</label>
-              <input
-                className="input"
-                placeholder="e.g. MH-02-DL-8899"
-                style={{
-                  textTransform: 'uppercase',
-                  fontWeight: 700,
-                  fontFamily: 'monospace'
+              <GuardMobileSelect
+                id="guard-vehicle-select"
+                sheetTitle="Select Vehicle Plate"
+                placeholder={
+                  recentScannedVehicles.length > 0
+                    ? 'Select from Recent Entry Scan / Queue'
+                    : 'Choose Vehicle Plate Option'
+                }
+                value={selectedVehicleOption}
+                leadingIcon={<IconCar size={15} />}
+                searchable={recentScannedVehicles.length > 4}
+                options={[
+                  ...recentScannedVehicles.map((item) => ({
+                    value: item.plate,
+                    label: item.plate,
+                    subtitle: item.label.includes('—')
+                      ? item.label.split('—').slice(1).join('—').trim()
+                      : undefined,
+                    icon: <IconCar size={16} />,
+                  })),
+                  {
+                    value: 'OTHER',
+                    label: 'Enter Other Vehicle Plate Number',
+                    subtitle: 'Type registration number manually',
+                    icon: <IconCar size={16} />,
+                  },
+                ]}
+                onChange={(val) => {
+                  setSelectedVehicleOption(val);
+                  if (val === 'OTHER') {
+                    setVehiclePlate('');
+                  } else if (val) {
+                    setVehiclePlate(val);
+                  }
                 }}
-                value={vehiclePlate}
-                onChange={(e) => setVehiclePlate(e.target.value)}
               />
+
+              {(selectedVehicleOption === 'OTHER' || recentScannedVehicles.length === 0 || selectedVehicleOption === '') && (
+                <div style={{ marginTop: '8px' }}>
+                  <input
+                    className="input"
+                    placeholder="e.g. MH02AB1234 or DL1CAB1234"
+                    style={{
+                      textTransform: 'uppercase',
+                      fontWeight: 700,
+                      fontFamily: 'monospace'
+                    }}
+                    value={vehiclePlate}
+                    onChange={(e) => {
+                      const upper = e.target.value.toUpperCase();
+                      setVehiclePlate(upper);
+                      if (selectedVehicleOption !== 'OTHER' && upper) {
+                        setSelectedVehicleOption('OTHER');
+                      }
+                    }}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: 'var(--neutral)', marginTop: '4px', display: 'block' }}>
+                    Valid Plate: 2-letter State + District + Optional Series + 4 digits (e.g. MH02AB1234)
+                  </span>
+                </div>
+              )}
             </div>
 
             <button
@@ -734,101 +1282,180 @@ export const GuardApp: React.FC = () => {
         onTabChange={setCurrentTab}
       />
 
-      {/* Camera Facial Snapshot Modal */}
-      {isPhotoModalOpen && (
+      {/* Full-Screen Camera Modal (Visitor Photo / Vehicle Plate Scan) */}
+      {cameraModalMode && (
         <div
-          className="mobile-modal-overlay"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'rgba(0,0,0,0.7)',
-            zIndex: 250,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '16px'
-          }}
+          className={clsx(
+            'guard-photo-modal',
+            photoFacingMode === 'user' && photoTorchOn && 'is-front-flash',
+          )}
+          role="dialog"
+          aria-modal="true"
+          aria-label={cameraModalMode === 'plate-scan' ? 'Scan Vehicle Plate' : 'Snap Visitor Photo'}
         >
-          <div
-            className="card"
-            style={{
-              width: '100%',
-              maxWidth: '340px',
-              padding: '16px',
-              borderRadius: 'var(--radius-lg)',
-              background: 'var(--surface)'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--pine-dark)', display: 'inline-flex', alignItems: 'center', gap: '6px', margin: 0 }}>
-                <IconCamera size={18} />
-                <span>Snap Visitor Photo</span>
-              </h3>
+          <div className="guard-photo-modal-header">
+            <h3 className="guard-photo-modal-title">
+              {cameraModalMode === 'plate-scan' ? <IconCar size={18} /> : <IconCamera size={18} />}
+              <span>
+                {cameraModalMode === 'plate-scan' ? 'Scan Vehicle Plate' : 'Snap Visitor Photo'}
+              </span>
+            </h3>
+            <div className="guard-photo-modal-controls">
               <button
                 type="button"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px' }}
-                onClick={() => setIsPhotoModalOpen(false)}
-                aria-label="Close"
+                className="guard-photo-hud-btn"
+                onClick={togglePhotoFacing}
+                aria-label="Flip Camera"
+                title="Flip Camera"
+              >
+                <IconFlip size={15} />
+                <span>Flip</span>
+              </button>
+              <button
+                type="button"
+                className={clsx('guard-photo-hud-btn', photoTorchOn && 'is-active')}
+                onClick={() => void togglePhotoTorch()}
+                aria-label={photoTorchOn ? 'Turn Flash Off' : 'Turn Flash On'}
+                aria-pressed={photoTorchOn}
+                title="Toggle Flash"
+              >
+                <IconLightning size={15} />
+                <span>{photoTorchOn ? 'Flash On' : 'Flash'}</span>
+              </button>
+              <button
+                type="button"
+                className="guard-photo-hud-close"
+                onClick={closePhotoModal}
+                aria-label="Close Camera"
               >
                 <IconClose size={18} />
               </button>
             </div>
+          </div>
 
-            <div
-              style={{
-                width: '100%',
-                height: '220px',
-                background: '#0a1613',
-                borderRadius: 'var(--radius-md)',
-                overflow: 'hidden',
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: '14px'
-              }}
-            >
+          <div className="guard-photo-stage">
+            {cameraModalMode === 'plate-scan' && plateSnapshotUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={plateSnapshotUrl}
+                alt="Captured vehicle plate frame"
+                className="guard-photo-video"
+              />
+            ) : (
               <video
                 ref={photoVideoRef}
                 autoPlay
                 playsInline
                 muted
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                className={clsx(
+                  'guard-photo-video',
+                  photoFacingMode === 'user' && 'is-mirrored',
+                )}
+                style={{ display: photoCameraActive ? 'block' : 'none' }}
               />
-              <div
-                style={{
-                  position: 'absolute',
-                  width: '140px',
-                  height: '170px',
-                  border: '2px dashed rgba(224, 138, 44, 0.7)',
-                  borderRadius: '50% / 60%',
-                  pointerEvents: 'none'
-                }}
-              ></div>
-            </div>
+            )}
+            {photoFacingMode === 'user' && photoTorchOn && (
+              <div className="guard-photo-screen-glow" aria-hidden="true" />
+            )}
+            {isScreenFlashBurst && (
+              <div className="guard-photo-flash-burst" aria-hidden="true" />
+            )}
+            {!photoCameraActive && !(cameraModalMode === 'plate-scan' && plateSnapshotUrl) && (
+              <div className="guard-photo-fallback">
+                {cameraModalMode === 'plate-scan' ? <IconCar size={36} /> : <IconCamera size={36} />}
+                <strong>Camera Feed Initializing</strong>
+                <span>
+                  {photoCameraError ||
+                    (cameraModalMode === 'plate-scan'
+                      ? 'Allow camera access to scan vehicle plate, or enter plate below.'
+                      : 'Allow camera permission to capture visitor photo.')}
+                </span>
+              </div>
+            )}
+            {cameraModalMode === 'plate-scan' ? (
+              <div className="guard-plate-reticle" aria-hidden="true">
+                <div className="guard-plate-reticle-beam" />
+              </div>
+            ) : (
+              <div className="guard-photo-reticle" aria-hidden="true" />
+            )}
+            <span className="guard-photo-hint">
+              {cameraModalMode === 'plate-scan'
+                ? plateSnapshotUrl
+                  ? 'Plate frame captured · Review & apply below'
+                  : 'Align license plate inside frame'
+                : photoFacingMode === 'user'
+                ? photoTorchOn
+                  ? 'Front Screen Flash Active · Align face'
+                  : 'Front Camera · Align face inside frame'
+                : 'Rear Camera · Align face inside frame'}
+            </span>
+          </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
+          {cameraModalMode === 'plate-scan' && (
+            <div className="guard-plate-result-bar">
+              <label className="guard-plate-result-label" htmlFor="guard-plate-scan-input">
+                Scanned / Detected Plate Number
+              </label>
+              <div className="guard-plate-result-row">
+                <input
+                  id="guard-plate-scan-input"
+                  className="guard-plate-result-input"
+                  placeholder="MH02AB1234"
+                  value={plateScanDraft}
+                  onChange={(e) => setPlateScanDraft(e.target.value.toUpperCase())}
+                />
+                {plateSnapshotUrl ? (
+                  <button
+                    type="button"
+                    className="guard-plate-retake-btn"
+                    onClick={() => setPlateSnapshotUrl(null)}
+                  >
+                    Retake
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="guard-plate-retake-btn"
+                    onClick={capturePhotoSnapshot}
+                  >
+                    Snap Frame
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="guard-photo-footer">
+            <button
+              type="button"
+              className="guard-photo-cancel"
+              onClick={closePhotoModal}
+            >
+              Cancel
+            </button>
+            {cameraModalMode === 'plate-scan' ? (
               <button
                 type="button"
-                className="btn btn-ghost"
-                style={{ flex: 1, fontSize: '0.8125rem' }}
-                onClick={() => setIsPhotoModalOpen(false)}
+                className="guard-photo-capture"
+                onClick={handleApplyPlateScan}
               >
-                Cancel
+                <IconCheck size={17} />
+                <span>Use Plate Number</span>
               </button>
+            ) : (
               <button
                 type="button"
-                className="btn btn-primary"
-                style={{ flex: 2, fontSize: '0.8125rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                className="guard-photo-capture"
                 onClick={capturePhotoSnapshot}
               >
-                <IconCamera size={16} />
+                <IconCamera size={17} />
                 <span>Capture Photo</span>
               </button>
-            </div>
+            )}
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 };

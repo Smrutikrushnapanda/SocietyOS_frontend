@@ -12,34 +12,79 @@ import {
   IconCheck,
   IconCalendar,
   IconCar,
-  IconQrCode
+  IconMaximize,
+  IconMinimize,
+  IconDoor
 } from '../common/Icons';
+import { GuardMobileSelect } from './GuardMobileSelect';
+import { useGuestPassScanner } from '../../hooks/useGuestPassScanner';
+import { usePassClock } from '../../hooks/usePassClock';
+import { filterValidGuestPasses } from '../../lib/guard-passes';
 
 interface GuardQrScannerModalProps {
   onClose: () => void;
-  onConfirmEntry: (passCode: string, vehicleNo: string, gateName: string) => void;
+  onConfirmEntry: (visitId: string, token: string, vehicleNo: string, gateName: string) => Promise<void>;
 }
 
 export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
   onClose,
   onConfirmEntry
 }) => {
-  const { preApprovedPasses, getPassByCodeOrName } = useVisitorStore();
+  const { preApprovedPasses } = useVisitorStore();
   const { showToast } = useToastStore();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const cameraContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedPass, setSelectedPass] = useState<PreApprovedPass | null>(null);
   const [manualCode, setManualCode] = useState('');
+  const [isConfirming, setIsConfirming] = useState(false);
+  const confirming = useRef(false);
   const [vehicleNo, setVehicleNo] = useState('');
-  const [gateName, setGateName] = useState('Gate 01 • North Booth');
+  const [gateName, setGateName] = useState('Main Gate Terminal');
 
   // Camera state
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [torchOn, setTorchOn] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    if (!isFullScreen) {
+      if (cameraContainerRef.current?.requestFullscreen) {
+        try {
+          await cameraContainerRef.current.requestFullscreen();
+        } catch {
+          // fallback to CSS fullscreen
+        }
+      }
+      setIsFullScreen(true);
+    } else {
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {
+          // ignore error
+        }
+      }
+      setIsFullScreen(false);
+    }
+  };
 
   // Initialize WebRTC Camera Stream
   useEffect(() => {
@@ -100,11 +145,16 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
 
   // Flip Camera
   const toggleCameraFacing = () => {
+    setTorchOn(false);
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // Toggle Torch if available
+  // Toggle Torch (rear LED or front white-screen illumination)
   const toggleTorch = async () => {
+    if (facingMode === 'user') {
+      setTorchOn((prev) => !prev);
+      return;
+    }
     if (!mediaStreamRef.current) return;
     const track = mediaStreamRef.current.getVideoTracks()[0];
     if (track) {
@@ -125,6 +175,21 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
     }
   };
 
+  const passNow = usePassClock([
+    ...preApprovedPasses.flatMap(pass => [pass.startDate, pass.endDate]),
+    selectedPass?.startDate,
+    selectedPass?.endDate,
+  ]);
+  const validPreApprovedPasses = filterValidGuestPasses(preApprovedPasses, new Date(passNow));
+  const selectedPassExpired = !!selectedPass && Date.parse(selectedPass.endDate) <= passNow;
+
+  useEffect(() => {
+    if (selectedPassExpired && !isConfirming) {
+      setSelectedPass(null);
+      showToast('Guest pass has expired', 'error');
+    }
+  }, [selectedPassExpired, isConfirming, showToast]);
+
   const handleSelectPass = (pass: PreApprovedPass) => {
     // Stop camera
     if (mediaStreamRef.current) {
@@ -137,22 +202,23 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
     showToast(`QR FastPass Matched: #${pass.passCode} for Flat ${pass.flat}!`);
   };
 
-  const handleManualLookup = () => {
-    if (!manualCode.trim()) {
-      alert('Please enter a Pass Code or QR Token');
-      return;
-    }
-    const found = getPassByCodeOrName(manualCode) || preApprovedPasses[0];
-    if (found) {
-      handleSelectPass(found);
-    } else {
-      showToast('No matching pre-approved pass found. Please verify details.');
-    }
-  };
+  const { verifyToken, scanImage, isVerifying } = useGuestPassScanner(videoRef, cameraActive && !selectedPass, handleSelectPass);
 
-  const handleConfirm = () => {
-    if (!selectedPass) return;
-    onConfirmEntry(selectedPass.passCode || selectedPass.id, vehicleNo, gateName);
+  const handleManualLookup = () => { void verifyToken(manualCode); };
+
+  const handleConfirm = async () => {
+    if (!selectedPass?.visitId || !selectedPass.qrToken || selectedPassExpired || confirming.current) return;
+    confirming.current = true;
+    setIsConfirming(true);
+    try {
+      await onConfirmEntry(selectedPass.visitId, selectedPass.qrToken, vehicleNo, gateName);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Guest entry failed', 'error');
+      setSelectedPass(null);
+    } finally {
+      confirming.current = false;
+      setIsConfirming(false);
+    }
   };
 
   const handleCloseModal = () => {
@@ -260,18 +326,22 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
             <>
               {/* Camera Video / Optical Viewport */}
               <div
+                ref={cameraContainerRef}
+                className={facingMode === 'user' && torchOn ? 'guard-scanner-viewfinder-flash' : undefined}
                 style={{
-                  position: 'relative',
-                  width: '100%',
-                  height: '240px',
-                  backgroundColor: '#091512',
-                  borderRadius: 'var(--radius-lg)',
+                  position: isFullScreen ? 'fixed' : 'relative',
+                  inset: isFullScreen ? 0 : undefined,
+                  width: isFullScreen ? '100vw' : '100%',
+                  height: isFullScreen ? '100vh' : '240px',
+                  zIndex: isFullScreen ? 99999 : undefined,
+                  backgroundColor: facingMode === 'user' && torchOn ? '#ffffff' : '#091512',
+                  borderRadius: isFullScreen ? 0 : 'var(--radius-lg)',
                   overflow: 'hidden',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  marginBottom: '14px',
-                  border: '2px solid var(--pine)'
+                  marginBottom: isFullScreen ? 0 : '14px',
+                  border: isFullScreen ? 'none' : '2px solid var(--pine)'
                 }}
               >
                 {/* Live WebRTC Camera Feed */}
@@ -377,7 +447,7 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    zIndex: 5
+                    zIndex: 10
                   }}
                 >
                   <span
@@ -401,7 +471,7 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                         backgroundColor: '#ffffff'
                       }}
                     />
-                    {cameraActive ? 'CAMERA LIVE' : 'SIMULATION MODE'}
+                    {cameraActive ? 'CAMERA LIVE' : 'CAMERA UNAVAILABLE'}
                   </span>
 
                   <div style={{ display: 'flex', gap: '4px' }}>
@@ -424,6 +494,27 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                     >
                       <IconFlip size={12} />
                       <span>Flip</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={toggleFullscreen}
+                      style={{
+                        background: isFullScreen ? 'var(--pine)' : 'rgba(0,0,0,0.6)',
+                        border: '1px solid rgba(255,255,255,0.3)',
+                        color: '#fff',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        fontSize: '0.65rem',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title={isFullScreen ? 'Close Full Screen' : 'Full Screen'}
+                      aria-label={isFullScreen ? 'Close Full Screen' : 'Full Screen'}
+                    >
+                      {isFullScreen ? <IconMinimize size={12} /> : <IconMaximize size={12} />}
+                      <span>{isFullScreen ? 'Exit Full' : 'Full Screen'}</span>
                     </button>
                     <button
                       type="button"
@@ -457,7 +548,7 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                       Align Visitor&apos;s Phone QR in Frame
                     </div>
                     <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px' }}>
-                      {cameraError ? `Camera notice: ${cameraError}` : 'Detecting holographic QR code...'}
+                      {cameraError ? `Camera notice: ${cameraError}` : 'Detecting guest QR code...'}
                     </div>
                   </div>
                 )}
@@ -475,50 +566,65 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                     marginBottom: '6px'
                   }}
                 >
-                  Simulate Target Pre-Approved Guest QR:
+                  Pre-approved guest passes:
                 </span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {preApprovedPasses.slice(0, 3).map((p) => (
+                  {validPreApprovedPasses.slice(0, 3).map((p) => (
                     <button
                       key={p.id}
                       type="button"
                       className="btn btn-ghost"
                       style={{
-                        padding: '8px 10px',
+                        padding: '10px 12px',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         border: '1px solid var(--border)',
-                        fontSize: '0.75rem',
+                        fontSize: '0.8125rem',
                         textAlign: 'left',
                         width: '100%',
                         borderRadius: '8px',
                         background: '#ffffff'
                       }}
-                      onClick={() => handleSelectPass(p)}
+                      onClick={() => { void verifyToken(p.qrToken || p.id); }}
                     >
-                      <div>
-                        <strong style={{ color: 'var(--pine-dark)' }}>{p.guestName}</strong>
-                        <span style={{ color: 'var(--neutral)', fontSize: '0.6875rem' }}>
-                          {' '}
-                          • Flat {p.flat} ({p.purpose})
-                        </span>
-                      </div>
-                      <span className="badge badge-success" style={{ fontSize: '0.625rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <IconQrCode size={11} />
-                        <span>Scan {p.passCode}</span>
-                      </span>
+                      <strong style={{ color: 'var(--pine-dark)' }}>{p.guestName}</strong>
+                      <span style={{ color: 'var(--neutral)', fontSize: '1rem', lineHeight: 1 }} aria-hidden="true">›</span>
                     </button>
                   ))}
                 </div>
               </div>
 
+            <button
+              type="button"
+              className="guard-qr-image-upload"
+              disabled={isVerifying}
+              aria-busy={isVerifying}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <span className="guard-qr-image-upload-icon" aria-hidden="true"><IconCamera size={22} /></span>
+              <span className="guard-qr-image-upload-copy">
+                <strong>{isVerifying ? 'Verifying guest pass…' : 'Scan QR from image'}</strong>
+                <span>Choose a guest pass from your gallery</span>
+              </span>
+              <span className="guard-qr-image-upload-arrow" aria-hidden="true">›</span>
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              disabled={isVerifying}
+              aria-label="Scan QR from image"
+              onChange={event => { void scanImage(event.target.files?.[0]); event.target.value = ''; }}
+            />
+            {isVerifying && <p role="status">Verifying guest pass…</p>}
               {/* Manual Pass Code Input */}
               <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                 <input
                   className="input"
                   id="guard-manual-pass-input"
-                  placeholder="Or enter Pass Code (e.g. GP-9481)"
+                  placeholder="Enter full pass code or QR token"
                   value={manualCode}
                   onChange={(e) => setManualCode(e.target.value)}
                   style={{ fontSize: '0.8125rem' }}
@@ -527,6 +633,7 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                   type="button"
                   className="btn btn-primary"
                   style={{ padding: '0 16px', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+                  disabled={isVerifying}
                   onClick={handleManualLookup}
                 >
                   Verify
@@ -645,23 +752,27 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                 <label className="form-label" style={{ fontSize: '0.75rem' }}>
                   Entry Gate Terminal
                 </label>
-                <select
-                  className="select"
+                <GuardMobileSelect
                   id="guard-scanned-gate"
-                  style={{ fontSize: '0.8125rem' }}
+                  sheetTitle="Select Entry Gate"
+                  placeholder="Select Entry Gate"
                   value={gateName}
-                  onChange={(e) => setGateName(e.target.value)}
-                >
-                  <option value="Gate 01 • North Booth">Gate 01 • North Booth (Main Gate)</option>
-                  <option value="Gate 02 • Back Gate">Gate 02 • Back Gate</option>
-                  <option value="Service & Delivery Gate #3">Service & Delivery Gate #3</option>
-                </select>
+                  leadingIcon={<IconDoor size={15} />}
+                  options={[
+                    { value: 'Main Gate Terminal', label: 'Main Gate Terminal', icon: <IconDoor size={16} /> },
+                    { value: 'North Booth', label: 'North Booth', icon: <IconDoor size={16} /> },
+                    { value: 'Back Gate', label: 'Back Gate', icon: <IconDoor size={16} /> },
+                    { value: 'Service & Delivery Gate', label: 'Service & Delivery Gate', icon: <IconDoor size={16} /> },
+                  ]}
+                  onChange={(val) => setGateName(val)}
+                />
               </div>
 
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   className="btn btn-ghost"
                   style={{ flex: 1, fontSize: '0.75rem' }}
+                  disabled={isConfirming}
                   onClick={() => setSelectedPass(null)}
                 >
                   Scan Another
@@ -669,10 +780,11 @@ export const GuardQrScannerModal: React.FC<GuardQrScannerModalProps> = ({
                 <button
                   className="btn btn-barrier"
                   style={{ flex: 2, padding: '12px', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                  disabled={isConfirming || selectedPassExpired}
                   onClick={handleConfirm}
                 >
                   <IconCheck size={16} />
-                  <span>Confirm &amp; Open Barrier</span>
+                  <span>{isConfirming ? 'Logging entry…' : 'Confirm entry'}</span>
                 </button>
               </div>
             </>

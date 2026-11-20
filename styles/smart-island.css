@@ -1,0 +1,199 @@
+/* Reserve the top row so event arrivals never move the resident header. */
+.phone-screen-resident .phone-status-bar {
+  height: 60px;
+  flex-shrink: 0;
+  align-items: center;
+  padding-bottom: 0;
+}
+
+.device-wrapper:has(.society-smart-island) > .device-notch {
+  display: none;
+}
+
+
+.society-smart-island {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 80px);
+  max-width: 340px; /* Increased from 240px */
+  z-index: 50;
+  border-radius: 24px;
+  background: #000;
+  color: #fff;
+  box-shadow: 0 8px 24px #0003;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 40px;
+  transition:
+    width 700ms cubic-bezier(.22, 1, .36, 1),
+    max-height 800ms cubic-bezier(.22, 1, .36, 1),
+    border-radius 500ms ease,
+    box-shadow 500ms ease;
+  animation: island-appear 420ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.society-smart-island[data-expanded="true"] {
+  width: min(92%, 460px); /* Increased from 420px */
+  max-width: none;
+  max-height: calc(100% - 88px - env(safe-area-inset-bottom, 0px));
+  border-radius: 22px;
+  box-shadow: 0 12px 36px #0005;
+}
+
+
+.society-smart-island button {
+  color: inherit;
+  background: transparent;
+  border: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.society-smart-island button:focus-visible {
+  outline: 2px solid white;
+  outline-offset: -3px;
+}
+
+.society-smart-island .island-toggle {
+  flex-shrink: 0;
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: .75rem;
+}
+
+.island-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.island-type-icon { flex: 0 0 auto; }
+.island-arrival-bell {
+  flex: 0 0 auto;
+  transform-origin: 50% 18%;
+  animation: island-bell-ring 180ms ease-in-out 0s 4 alternate;
+}
+.island-unread-count { min-width: 12px; color: #fff; font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.island-critical {
+  width: 100%;
+  background: #8d2020 !important;
+  font-size: .75rem !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 0 !important;
+  max-height: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 650ms cubic-bezier(.22, 1, .36, 1), opacity 250ms ease, padding 500ms ease;
+}
+
+.society-smart-island[data-expanded="true"] .island-critical:not([aria-hidden="true"]) {
+  max-height: 44px;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+  opacity: 1;
+}
+
+.smart-island-details {
+  min-height: 0;
+  max-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px;
+  overflow-wrap: anywhere;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: max-height 700ms cubic-bezier(.22, 1, .36, 1), opacity 300ms ease, padding 500ms ease, visibility 0s linear 700ms;
+}
+
+.society-smart-island[data-expanded="true"] .smart-island-details {
+  max-height: min(52dvh, 420px);
+  padding-bottom: 12px;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.smart-island-details::-webkit-scrollbar {
+  display: none;
+}
+
+.island-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.island-event {
+  border-top: 1px solid #ffffff40;
+  padding: 8px 0;
+}
+
+.island-event-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.island-event p, .smart-island-details > p {
+  margin: 4px 0;
+  color: inherit;
+  font-size: .8125rem;
+  white-space: pre-wrap;
+}
+
+.island-event small, .island-event time {
+  display: block;
+  font-size: .6875rem;
+  color: #e0ebe5;
+}
+
+@media (max-width: 420px) {
+  .device-wrapper-resident {
+    height: 100dvh;
+  }
+
+  .phone-screen-resident .phone-status-bar {
+    height: calc(60px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .society-smart-island { top: calc(8px + env(safe-area-inset-top, 0px)); }
+}
+
+@keyframes island-appear {
+  from { opacity: 0; transform: translateX(-50%) scale(.9); }
+  to { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
+@keyframes island-bell-ring {
+  from { transform: rotate(-16deg); }
+  to { transform: rotate(16deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .society-smart-island { transition: none; animation: none; }
+  .island-arrival-bell { animation: none; }
+}

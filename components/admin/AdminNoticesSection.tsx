@@ -1,221 +1,203 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useNoticeStore, useToastStore } from '../../store';
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuthStore, useToastStore } from '../../store';
+import { NoticeDraftEditor } from './NoticeDraftEditor';
+import { cancelNoticeSchedule, getNoticeCapabilities, type NoticeCapabilities } from '../../lib/api/notices.api';
+import { useCollectionPage } from '../../hooks/useCollectionPage';
+import { Pagination } from '../common/Pagination';
+import { publishNotice, expireNotice } from '../../lib/api/notices.api';
+import type { BackendNotice } from '../../types/notice';
+import { AdminPollsSection } from './AdminPollsSection';
 
 export const AdminNoticesSection: React.FC = () => {
-  const { notices, addNotice, deleteNotice } = useNoticeStore();
+  const { organizationId } = useAuthStore();
   const { showToast } = useToastStore();
 
+  const [activeTab, setActiveTab] = useState<'notices' | 'polls'>('notices');
+  const { items: notices, isLoading, error, load: loadNotices, hasLoaded, page, setPage, total, totalPages, limit } = useCollectionPage<BackendNotice>('notices', activeTab === 'notices');
   const [showModal, setShowModal] = useState(false);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<'maintenance' | 'event' | 'rule' | 'general'>('maintenance');
-  const [priority, setPriority] = useState<'normal' | 'important' | 'urgent'>('important');
+  const [editing, setEditing] = useState<BackendNotice | null>(null);
+  const [capabilities, setCapabilities] = useState<NoticeCapabilities | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+  const publishingIds = useRef(new Set<string>());
+  useEffect(() => {
+    let active = true;
+    if (organizationId) void getNoticeCapabilities().then(value => { if (active) setCapabilities(value); }).catch(() => { if (active) setCapabilities(null); });
+    return () => { active = false; };
+  }, [organizationId]);
 
-  const handlePostNotice = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-
-    addNotice({
-      id: `notice-${Date.now()}`,
-      title: title.trim(),
-      description: description.trim() || 'Notice details broadcasted to all residents.',
-      category,
-      priority,
-      date: 'Today',
-      dayShort: 'TODAY',
-      broadcastViaWhatsApp: true
-    });
-
-    showToast(`Notice '${title}' posted & broadcasted via WhatsApp!`);
-    setTitle('');
-    setDescription('');
-    setShowModal(false);
+  const handlePublish = async (id: string) => {
+    if (publishingIds.current.has(id)) return;
+    try {
+      const emergency = notices.find(notice => notice.id === id)?.priority === 'EMERGENCY';
+      if (emergency && !window.confirm('Publish a mandatory emergency alert to organization residents?')) return;
+      publishingIds.current.add(id);
+      setPublishingId(id);
+      await publishNotice(id, emergency);
+      await loadNotices();
+      showToast('Notice published in app. External delivery is queued when enabled.');
+    } catch (err: any) {
+      showToast(err?.response?.data?.message || err?.message || 'Failed to publish notice');
+    } finally {
+      publishingIds.current.delete(id);
+      setPublishingId(current => current === id ? null : current);
+    }
   };
 
-  const daysOfWeek = [
-    { day: 'Mon', date: '25', count: 0 },
-    { day: 'Tue', date: '26', count: 1 },
-    { day: 'Wed', date: '27', count: 0 },
-    { day: 'Thu', date: '28', count: 1 },
-    { day: 'Fri', date: '29', count: notices.length, active: true },
-    { day: 'Sat', date: '30', count: 1 },
-    { day: 'Sun', date: '01', count: 0 }
-  ];
+  const handleExpire = async (id: string) => {
+    try {
+      await expireNotice(id);
+      await loadNotices();
+      showToast('Notice marked as expired / archived.');
+    } catch (err: any) {
+      showToast(err?.response?.data?.message || err?.message || 'Failed to archive notice');
+    }
+  };
 
   return (
     <div className="admin-section active" id="section-notices">
       <div className="section-header">
         <div>
-          <h2>Society Notice Board & Calendar</h2>
+          <h2>Society Notice Board, Circulars & Polls</h2>
           <p style={{ fontSize: '0.8125rem', color: 'var(--neutral)' }}>
-            Weekly scheduled maintenance drives, AGM circulars, and official notices.
+            Official RWA circulars, maintenance drives, and democratic community ballots.
           </p>
         </div>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}>
-          + Post New Notice
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {activeTab === 'notices' && (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => void loadNotices()} disabled={isLoading}>
+                Refresh
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={() => { setEditing(null); setShowModal(true); }}>
+                + Create New Notice
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Subnav for Circulars vs Polls */}
+      <div className="module-subnav" style={{ marginBottom: '16px' }}>
+        <button
+          className={`module-tab-btn ${activeTab === 'notices' ? 'active' : ''}`}
+          onClick={() => setActiveTab('notices')}
+        >
+          Official Circulars & Notices
+        </button>
+        <button
+          className={`module-tab-btn ${activeTab === 'polls' ? 'active' : ''}`}
+          onClick={() => setActiveTab('polls')}
+        >
+          Community Polls & Voting
         </button>
       </div>
 
-      {/* Week Calendar Strip */}
-      <div className="calendar-strip">
-        {daysOfWeek.map((d, i) => (
-          <div
-            key={i}
-            className={`calendar-day-card ${d.active ? 'active' : ''}`}
-            style={{
-              padding: '12px',
-              borderRadius: 'var(--radius-md)',
-              border: d.active ? '2px solid var(--pine)' : '1px solid var(--border-subtle)',
-              background: d.active ? 'var(--pine-tint)' : '#ffffff',
-              textAlign: 'center',
-              flex: 1,
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: d.active ? 'var(--pine-dark)' : 'var(--neutral)' }}>
-              {d.day}
-            </div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: d.active ? 'var(--pine)' : 'var(--ink)', margin: '4px 0' }}>
-              {d.date}
-            </div>
-            <span
-              className={`badge ${d.count > 0 ? (d.active ? 'badge-pine' : 'badge-neutral') : ''}`}
-              style={{ fontSize: '0.625rem', padding: '2px 6px' }}
-            >
-              {d.count > 0 ? `${d.count} Events` : '—'}
-            </span>
-          </div>
-        ))}
-      </div>
+      {activeTab === 'polls' ? (
+        <AdminPollsSection />
+      ) : (
+        <>
 
-      {/* Full Notices List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '20px' }}>
-        {notices.map((n) => (
-          <div
-            key={n.id}
-            className="card"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-              border: '1px solid var(--border-subtle)',
-              borderLeft: n.priority === 'urgent' ? '4px solid var(--danger)' : n.priority === 'important' ? '4px solid var(--saffron)' : '4px solid var(--pine)'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span
-                  className={`badge ${
-                    n.priority === 'urgent' ? 'badge-danger' : n.priority === 'important' ? 'badge-warning' : 'badge-pine'
-                  }`}
-                >
-                  {n.priority?.toUpperCase() || 'GENERAL'}
-                </span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>{n.date}</span>
-                {n.broadcastViaWhatsApp && (
-                  <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>
-                    WhatsApp Sent
-                  </span>
-                )}
-              </div>
-              <button
-                className="btn btn-xs btn-danger"
-                onClick={() => {
-                  deleteNotice(n.id);
-                  showToast('Notice removed from board.');
-                }}
-              >
-                Delete
-              </button>
-            </div>
-
-            <h3 style={{ fontSize: '1.05rem', color: 'var(--ink)' }}>{n.title}</h3>
-            <p style={{ fontSize: '0.875rem', color: 'var(--neutral-dark)', lineHeight: 1.5 }}>
-              {n.description}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {/* Modal: Post New Notice */}
-      {showModal && (
-        <div className="modal-overlay">
-          <div className="modal-dialog">
-            <div className="modal-header">
-              <h3>+ Broadcast New Society Notice</h3>
-              <button className="modal-close-btn" onClick={() => setShowModal(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-            </div>
-            <form onSubmit={handlePostNotice}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">Notice Subject</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="e.g. Overhead Tank Cleaning & Water Supply Suspension"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label className="form-label">Category</label>
-                    <select
-                      className="form-select"
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value as any)}
-                    >
-                      <option value="maintenance">Maintenance Drive</option>
-                      <option value="event">Community Event / Festival</option>
-                      <option value="rule">Society Rules & Guidelines</option>
-                      <option value="general">General Circular</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Priority</label>
-                    <select
-                      className="form-select"
-                      value={priority}
-                      onChange={(e) => setPriority(e.target.value as any)}
-                    >
-                      <option value="normal">Normal</option>
-                      <option value="important">Important</option>
-                      <option value="urgent">Urgent Alert</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Notice Content</label>
-                  <textarea
-                    className="form-textarea"
-                    rows={4}
-                    placeholder="Write detailed instructions for residents..."
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    required
-                  ></textarea>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '8px' }}>
-                  <input type="checkbox" id="chk-wa-broadcast" defaultChecked />
-                  <label htmlFor="chk-wa-broadcast" style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
-                    Instant WhatsApp Broadcast to all 40 resident phones via Meta Cloud API
-                  </label>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary btn-sm">
-                  Publish Notice
-                </button>
-              </div>
-            </form>
-          </div>
+      {isLoading && notices.length === 0 && (
+        <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--neutral)' }}>
+          <div style={{ fontSize: '0.875rem' }}>Loading society notices...</div>
         </div>
+      )}
+
+      {error && notices.length === 0 && (
+        <div className="card" style={{ padding: '20px', textAlign: 'center', marginBottom: '16px' }}>
+          <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: '12px' }}>{error}</p>
+          <button className="btn btn-sm btn-ghost" onClick={() => void loadNotices()}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {capabilities && <p role="status">Scheduled publication: {capabilities.scheduledPublication ? 'available' : 'unavailable'}. Push dispatch: {capabilities.pushDispatch && capabilities.deliveryWorker ? 'enabled' : 'disabled'}. WhatsApp dispatch: {capabilities.deliveryWorker ? 'enabled' : 'disabled'}. Disabled external deliveries remain queued.</p>}
+      <Pagination page={page} totalPages={totalPages} total={total} limit={limit} onPageChange={setPage} disabled={isLoading} label="Notices" />
+      {/* Full Notices List */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+        {notices.length === 0 && !isLoading && !error ? (
+          <div className="card" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--neutral)' }}>
+            {hasLoaded ? 'No notices published or in draft. Click "+ Create New Notice" to broadcast.' : 'Notices not loaded yet.'}
+          </div>
+        ) : (
+          notices.map((n) => (
+            <div
+              key={n.id}
+              className="card"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                border: '1px solid var(--border-subtle)',
+                borderLeft:
+                  n.status === 'PUBLISHED'
+                    ? '4px solid var(--pine)'
+                    : n.status === 'ARCHIVED'
+                    ? '4px solid var(--neutral)'
+                    : '4px solid var(--saffron)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span
+                    className={`badge ${
+                      n.status === 'PUBLISHED'
+                        ? 'badge-pine'
+                        : n.status === 'ARCHIVED'
+                        ? 'badge-neutral'
+                        : 'badge-warning'
+                    }`}
+                  >
+                    {n.status}
+                  </span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>
+                    Created: {new Date(n.created_at).toLocaleDateString()}
+                  </span>
+                  {n.published_at && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--pine)' }}>
+                      Published: {new Date(n.published_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {n.status === 'DRAFT' && <button className="btn btn-xs btn-ghost" onClick={() => { setEditing(n); setShowModal(true); }}>Edit draft</button>}
+                  {n.status === 'SCHEDULED' && <button className="btn btn-xs btn-ghost" onClick={async () => { try { await cancelNoticeSchedule(n.id); await loadNotices(); showToast('Schedule cancelled. Draft can now be edited.'); } catch { showToast('Schedule could not be cancelled. Refresh and retry.'); } }}>Cancel schedule / edit</button>}
+                  {n.status === 'DRAFT' && (
+                    <button
+                      className="btn btn-xs btn-primary"
+                      onClick={() => handlePublish(n.id)}
+                      disabled={publishingId === n.id}
+                    >
+                      {publishingId === n.id ? 'Publishing…' : 'Publish Notice →'}
+                    </button>
+                  )}
+                  {n.status === 'PUBLISHED' && (
+                    <button
+                      className="btn btn-xs btn-danger"
+                      onClick={() => handleExpire(n.id)}
+                    >
+                      Archive / Expire
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {n.scheduled_at && <p>Scheduled: {new Date(n.scheduled_at).toLocaleString()}</p>}
+              {n.priority === 'EMERGENCY' && <strong style={{ color: '#b91c1c' }}>EMERGENCY — mandatory alert</strong>}
+              <h3 style={{ fontSize: '1.05rem', color: 'var(--ink)' }}>{n.title}</h3>
+              <p style={{ fontSize: '0.875rem', color: 'var(--neutral-dark)', lineHeight: 1.5 }}>
+                {n.content || n.description}
+              </p>
+            </div>
+          ))
+        )}
+      </div>
+
+      {showModal && <NoticeDraftEditor key={`${organizationId}:${editing?.id ?? 'new'}`} notice={editing} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); void loadNotices(); showToast('Notice saved.'); }} />}
+      </>
       )}
     </div>
   );

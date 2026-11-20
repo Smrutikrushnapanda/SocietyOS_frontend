@@ -1,0 +1,254 @@
+/* ── Mobile Application Section Styles ─────────────────────────── */
+
+.section {
+  padding: 104px 24px;
+  background: #ffffff;
+}
+
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  max-width: 680px;
+  margin: 0 auto 56px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 16px;
+  border: 1px solid #cce8e2;
+}
+
+.title {
+  font-size: clamp(32px, 3.6vw, 46px);
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  margin: 0 0 16px;
+}
+
+.highlight {
+  color: #035F4F;
+  background: linear-gradient(135deg, #035F4F 0%, #16A085 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  font-size: 16px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 52px;
+  align-items: center;
+}
+
+/* Feature cards list */
+.cardList {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.roleCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 22px;
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.02);
+}
+
+.roleCard:hover {
+  border-color: #035F4F;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -6px rgba(3, 95, 79, 0.12);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.cardIcon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: #e6f4f1;
+  color: #035F4F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.cardTitle {
+  font-size: 17px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0;
+}
+
+.cardDesc {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.storeButtons {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.storeBtn {
+  background: #0F172A;
+  color: #ffffff;
+  padding: 11px 20px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 750;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.storeBtn:hover {
+  background: #1e293b;
+  transform: translateY(-1px);
+}
+
+/* Smartphone Mockup Preview */
+.mockupWrapper {
+  display: flex;
+  justify-content: center;
+}
+
+.phoneFrame {
+  width: 320px;
+  height: 610px;
+  background: #0f172a;
+  border-radius: 46px;
+  padding: 12px;
+  box-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+}
+
+.phoneScreen {
+  width: 100%;
+  height: 100%;
+  background: #f8fafc;
+  border-radius: 36px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.notch {
+  width: 110px;
+  height: 18px;
+  background: #0f172a;
+  border-radius: 0 0 14px 14px;
+  margin: 0 auto;
+}
+
+.screenHeader {
+  background: linear-gradient(135deg, #035F4F 0%, #02473b 100%);
+  padding: 18px 16px 14px;
+  color: #ffffff;
+}
+
+.userRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 750;
+  font-size: 13px;
+}
+
+.tabSwitch {
+  display: flex;
+  background: #e2e8f0;
+  padding: 4px;
+  gap: 4px;
+  margin: 12px 14px 6px;
+  border-radius: 10px;
+}
+
+.tabBtn {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 11.5px;
+  font-weight: 750;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.tabBtnActive {
+  background: #035F4F;
+  color: #ffffff;
+}
+
+.screenBody {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.actionCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+}
+
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -23,4 +23,5 @@ export interface SocietyDocument {
   category: string;
   description?: string;
   downloadUrl?: string;
+  fileId?: string; // Backend file_metadata ID for GET /api/v1/files/:id
 }

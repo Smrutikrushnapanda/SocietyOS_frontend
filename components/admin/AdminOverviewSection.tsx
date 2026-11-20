@@ -1,7 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useVisitorStore, useComplaintStore, usePaymentStore, useSocietyStore, useNoticeStore, useToastStore } from '../../store';
+import React, { useState, useEffect } from 'react';
+import {
+  useVisitorStore,
+  useComplaintStore,
+  usePaymentStore,
+  useSocietyStore,
+  useToastStore,
+  useAuthStore,
+} from '../../store';
+import { useSocietySettingsStore } from '../../store/useSocietySettingsStore';
+import { useCampusImage } from '../common/SocietySettings';
+import { societyDateKey } from '../../lib/calendar';
+import { getFlats } from '../../lib/api/flats.api';
+import { getResidents } from '../../lib/api/residents.api';
 import { AdminSectionType } from './AdminSidebar';
 
 interface AdminOverviewSectionProps {
@@ -9,54 +21,61 @@ interface AdminOverviewSectionProps {
 }
 
 export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNavigate }) => {
-  const { visitors, approveVisitor } = useVisitorStore();
+  const { visitors } = useVisitorStore();
   const { complaints } = useComplaintStore();
   const { maintenanceDue } = usePaymentStore();
   const { society } = useSocietyStore();
-  const { notices } = useNoticeStore();
+  const branding = useSocietySettingsStore(state => state.data?.branding);
+  const campusImage = useCampusImage(branding?.campusImageFileId);
   const { showToast } = useToastStore();
 
-  const [isScanning, setIsScanning] = useState(false);
-  const [anprTarget, setAnprTarget] = useState({
-    plate: 'MH-02-CB-4491',
-    flat: 'Flat A-101 (Aarav Sharma)',
-    slot: 'Slot A-01 (Basement)',
-    status: 'FASTAG CLEARED'
-  });
-  const [isGateLocked, setIsGateLocked] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const update = () => {
+      setNow(new Date());
+      // Society calendar uses IST; update the count at midnight without fetching.
+      timer = setTimeout(update, 86400000 - ((Date.now() + 19800000) % 86400000));
+    };
+    timer = setTimeout(update, 86400000 - ((Date.now() + 19800000) % 86400000));
+    return () => clearTimeout(timer);
+  }, []);
+  const todaysVisitors = visitors.filter(visitor => visitor.visitDate && societyDateKey(visitor.visitDate) === societyDateKey(now));
+  const explainAnpr = () => showToast('ANPR means Automatic Number Plate Recognition. Camera and barrier hardware are not connected. Use Security & Access for visitor approvals and gate passes.');
 
-  const triggerAnprScan = () => {
-    setIsScanning(true);
-    const plates = [
-      { plate: 'MH-02-CB-4491', flat: 'Flat A-101 (Aarav Sharma)', slot: 'Slot A-01 (Basement)' },
-      { plate: 'MH-02-AK-9920', flat: 'Flat A-102 (Priya Mukherjee)', slot: 'Slot A-02 (Basement)' },
-      { plate: 'MH-02-EF-1029', flat: 'Flat A-201 (Deepak Verma)', slot: 'Slot A-05 (Basement)' },
-      { plate: 'MH-02-ZA-5512', flat: 'Flat A-202 (Ananya Iyer)', slot: 'Slot A-06 (Basement)' }
-    ];
-    const picked = plates[Math.floor(Math.random() * plates.length)];
+  const { organizationId } = useAuthStore();
+  const [totalFlats, setTotalFlats] = useState<number>(0);
+  const [occupiedFlats, setOccupiedFlats] = useState<number>(0);
 
-    setTimeout(() => {
-      setAnprTarget({
-        ...picked,
-        status: 'FASTAG CLEARED'
+  useEffect(() => {
+    if (!organizationId) {
+      setTotalFlats(0);
+      setOccupiedFlats(0);
+      return;
+    }
+    let isCancelled = false;
+    Promise.all([getFlats(), getResidents()])
+      .then(([flats, residents]) => {
+        if (isCancelled) return;
+        const flatList = Array.isArray(flats) ? flats : (flats as any)?.data || [];
+        const resList = Array.isArray(residents) ? residents : (residents as any)?.data || [];
+        setTotalFlats(flatList.length);
+        const occupied = flatList.filter((f: any) => resList.some((r: any) => r.flat_id === f.id)).length;
+        setOccupiedFlats(occupied);
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setTotalFlats(0);
+          setOccupiedFlats(0);
+        }
       });
-      setIsScanning(false);
-      showToast(`ANPR Radar Matched: ${picked.plate} • Barrier Opened`);
-    }, 1200);
-  };
+    return () => {
+      isCancelled = true;
+    };
+  }, [organizationId]);
 
-  const toggleLockdown = () => {
-    setIsGateLocked((prev) => {
-      const next = !prev;
-      showToast(next ? 'Gate Emergency Lock Active' : 'Gate Normal Operation Restored');
-      return next;
-    });
-  };
-
-  const totalFlats = 40;
-  const occupiedFlats = 34;
-  const openComplaints = complaints.filter((c) => c.status === 'open').length;
-  const duesPending = maintenanceDue.due - maintenanceDue.paid;
+  const openComplaints = complaints.filter((c) => c.status === 'OPEN').length;
+  const duesPending = maintenanceDue ? maintenanceDue.due - maintenanceDue.paid : 0;
 
   return (
     <div className="admin-section active" id="section-overview">
@@ -67,19 +86,19 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
           <div>
             <strong style={{ fontSize: '0.875rem' }}>Command Deck Active</strong>
             <span style={{ fontSize: '0.75rem', opacity: 0.85, display: 'block' }}>
-              Gates 1 & 2 Online • Meta Cloud API 100% Synced
+              Visitor approvals, gate passes and society operations
             </span>
           </div>
         </div>
         <div className="dock-actions-row">
-          <button className="dock-btn accent" onClick={triggerAnprScan}>
+          <button className="dock-btn accent" onClick={explainAnpr}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
               <line x1="12" y1="12" x2="12" y2="18" />
               <line x1="9" y1="15" x2="15" y2="15" />
             </svg>
-            <span>Simulate ANPR Scan</span>
+            <span>About ANPR</span>
           </button>
           <button className="dock-btn" onClick={() => onNavigate('visitors')}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -105,10 +124,9 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
           <button
             className="dock-btn"
             id="dock-gate-lock-btn"
-            style={{ borderColor: isGateLocked ? '#b4402a' : undefined }}
-            onClick={toggleLockdown}
+            onClick={() => onNavigate('visitors')}
           >
-            <span>{isGateLocked ? 'Gate Locked' : 'Gate Normal'}</span>
+            <span>Gate Operations</span>
           </button>
         </div>
       </div>
@@ -116,7 +134,7 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
       {/* 3D Smart Campus Hero Banner with Interactive Hotspots */}
       <div className="campus-hero-banner">
         <img
-          src="/assets/society_campus_3d.jpg"
+          src={campusImage || "/assets/society_campus_3d.jpg"}
           alt="3D Smart Society Campus"
           className="campus-hero-img"
           onError={(e) => {
@@ -129,10 +147,10 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
         <div
           className="campus-hotspot"
           style={{ top: '82%', left: '42%' }}
-          onClick={triggerAnprScan}
+          onClick={explainAnpr}
         >
           <div className="hotspot-beacon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V6a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v14"/><path d="M2 20h20"/></svg></div>
-          <div className="hotspot-tooltip">Main Gate #1 • FastTag & ANPR Kiosk (Click to Scan)</div>
+          <div className="hotspot-tooltip">Gate access • About number plate recognition</div>
         </div>
 
         <div
@@ -164,13 +182,13 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
 
         <div className="campus-hero-content">
           <div className="campus-hero-title">
-            <h3>{society.name} Smart Living Campus</h3>
-            <p>Real-time spatial telemetry, automated ANPR barrier access & green solar infrastructure.</p>
+            <h3>{society.name} {branding?.campusTitle || 'Smart Living Campus'}</h3>
+            <p>{branding?.campusDescription || 'Manage society buildings, visitor access and shared facilities.'}</p>
           </div>
           <div className="campus-telemetry-strip">
-            <div className="telemetry-chip">Solar: 18.4 kWp</div>
-            <div className="telemetry-chip">Perimeter: Secure</div>
-            <div className="telemetry-chip">4/4 EV Bays Active</div>
+            <div className="telemetry-chip">Solar: —</div>
+            <div className="telemetry-chip">Perimeter: —</div>
+            <div className="telemetry-chip">EV Bays: —</div>
           </div>
         </div>
       </div>
@@ -181,15 +199,15 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
           <div className="kpi-label">Total Flats / Units</div>
           <div className="kpi-value">{totalFlats}</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)', fontWeight: 600 }}>{occupiedFlats} Occupied</span> • 6 Vacant
+            <span style={{ color: 'var(--success)', fontWeight: 600 }}>{occupiedFlats} Occupied</span> • {Math.max(totalFlats - occupiedFlats, 0)} Vacant
           </div>
         </div>
 
         <div className="kpi-card" onClick={() => onNavigate('visitors')} style={{ cursor: 'pointer' }}>
-          <div className="kpi-label">Today's Visitors</div>
-          <div className="kpi-value">{visitors.length}</div>
+          <div className="kpi-label">Today&apos;s Visitors</div>
+          <div className="kpi-value">{todaysVisitors.length}</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--pine)', fontWeight: 600 }}>{visitors.filter(v => v.status === 'checked-in').length} Inside</span> • FastTag Active
+            <span style={{ color: 'var(--pine)', fontWeight: 600 }}>{todaysVisitors.filter(v => v.status === 'checked-in').length} Inside</span> • Today, IST
           </div>
         </div>
 
@@ -199,7 +217,7 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
             {openComplaints}
           </div>
           <div className="kpi-sub">
-            <span>SLA: 96% on-time resolution</span>
+            <span>SLA: —</span>
           </div>
         </div>
 
@@ -209,87 +227,23 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
             ₹{duesPending.toLocaleString('en-IN')}
           </div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)', fontWeight: 600 }}>82% Collection Rate</span>
+            <span style={{ color: 'var(--success)', fontWeight: 600 }}>Collection Rate: —</span>
           </div>
         </div>
       </div>
 
       {/* 3D Feature Showcase Row: Smart Gate ANPR & Financial Vault */}
       <div className="overview-3d-visual-grid">
-        {/* Left: Smart AI Gate Kiosk & ANPR Laser Scanner */}
         <div className="interactive-3d-card" id="card-anpr-scanner">
-          <div className="interactive-3d-header">
-            <h4>
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: '#34d399',
-                  display: 'inline-block'
-                }}
-              ></span>
-              Smart Gate ANPR & FastTag Radar
-            </h4>
-            <button className="btn btn-sm btn-ghost" onClick={triggerAnprScan}>
-              Scan Now
-            </button>
-          </div>
+          <div className="interactive-3d-header"><h4>Gate & Visitor Access</h4><span className="badge badge-neutral">Manual gate workflow</span></div>
           <div className="interactive-3d-media-wrap">
-            <img
-              src="/assets/security_ai_kiosk_3d.jpg"
-              alt="AI Gate Security Checkpoint"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = '/shared/assets/security_ai_kiosk_3d.jpg';
-              }}
-            />
-            <div className="anpr-scanner-overlay">
-              <div
-                className="laser-beam"
-                id="anpr-laser-beam"
-                style={{ animationPlayState: isScanning ? 'running' : 'paused' }}
-              ></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <span className="anpr-hud-badge" id="anpr-hud-status">
-                  {isScanning ? 'ANPR SCANNING...' : 'ANPR RADAR: ACTIVE'}
-                </span>
-                <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>
-                  CAM 01 HD
-                </span>
-              </div>
-              <div
-                style={{
-                  background: 'rgba(15, 28, 24, 0.85)',
-                  padding: '8px 12px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid rgba(52, 211, 153, 0.4)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '0.6875rem', color: '#a7f3d0' }}>Target: Inbound Vehicle</div>
-                  <strong style={{ fontFamily: 'monospace', fontSize: '0.95rem', color: '#ffffff' }}>
-                    {anprTarget.plate}
-                  </strong>
-                </div>
-                <span className="badge badge-success">{anprTarget.status}</span>
-              </div>
-            </div>
+            <img src="/assets/security_ai_kiosk_3d.jpg" alt="Gate security illustration" />
           </div>
           <div className="interactive-3d-body">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8125rem' }}>
-              <span style={{ color: 'var(--neutral)' }}>Assigned Unit:</span>
-              <strong>{anprTarget.flat}</strong>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8125rem' }}>
-              <span style={{ color: 'var(--neutral)' }}>Allocated Bay:</span>
-              <span className="badge badge-pine">{anprTarget.slot}</span>
-            </div>
-            <button className="btn btn-sm btn-primary" style={{ marginTop: '4px' }} onClick={triggerAnprScan}>
-              Test FastTag Auto-Barrier Clearance
-            </button>
+            <strong>ANPR: Automatic Number Plate Recognition</strong>
+            <p>A camera reads vehicle number plates and checks authorized vehicles. ANPR camera and barrier controls are not connected to this system.</p>
+            <p>Guards can register arrivals, verify visitor passes, and record check-in and checkout through existing gate screens.</p>
+            <button className="btn btn-sm btn-primary" onClick={() => onNavigate('visitors')}>Open Security & Access</button>
           </div>
         </div>
 
@@ -326,10 +280,10 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
                   className="anpr-hud-badge"
                   style={{ borderColor: 'var(--saffron)', color: '#fef08a' }}
                 >
-                  RECOVERY: 82%
+                  RECOVERY: —
                 </span>
                 <span className="badge badge-warning" style={{ fontSize: '0.65rem' }}>
-                  HDFC ESCROW
+                  —
                 </span>
               </div>
               <div
@@ -344,21 +298,21 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({ onNa
                 }}
               >
                 <div>
-                  <div style={{ fontSize: '0.6875rem', color: '#fed7aa' }}>Monthly Billing (Sep 2026)</div>
-                  <strong style={{ fontSize: '1rem', color: '#ffffff' }}>₹2,36,400 Collected</strong>
+                  <div style={{ fontSize: '0.6875rem', color: '#fed7aa' }}>Monthly Billing</div>
+                  <strong style={{ fontSize: '1rem', color: '#ffffff' }}>₹0 Collected</strong>
                 </div>
-                <span className="badge badge-success">AUDITED</span>
+                <span className="badge badge-success">—</span>
               </div>
             </div>
           </div>
           <div className="interactive-3d-body">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8125rem' }}>
               <span style={{ color: 'var(--neutral)' }}>Reserve & Sinking Fund:</span>
-              <strong style={{ color: 'var(--pine-dark)' }}>₹14,50,000</strong>
+              <strong style={{ color: 'var(--pine-dark)' }}>₹0</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8125rem' }}>
               <span style={{ color: 'var(--neutral)' }}>Auto-Debit & UPI Adoption:</span>
-              <span className="badge badge-success">91% Digital</span>
+              <span className="badge badge-success">—</span>
             </div>
             <button className="btn btn-sm btn-accent" style={{ marginTop: '4px' }} onClick={() => onNavigate('finance')}>
               Reconcile Invoices & Auto-Remind Defaulters

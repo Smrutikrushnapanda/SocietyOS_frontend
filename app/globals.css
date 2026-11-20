@@ -1,7 +1,24 @@
 @import "../styles/tokens.css";
 @import "../styles/mobile-frame.css";
 @import "../styles/society.css";
+
 @import "../styles/guard.css";
 @import "../styles/admin.css";
 @import "../styles/auth.css";
 
+
+@import "../styles/smart-island.css";
+
+/* Keep resident touch scrolling while removing browser scrollbar chrome. */
+.phone-screen-resident,
+.phone-screen-resident * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.phone-screen-resident::-webkit-scrollbar,
+.phone-screen-resident *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

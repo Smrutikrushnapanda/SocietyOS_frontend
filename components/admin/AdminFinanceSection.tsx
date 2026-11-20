@@ -1,46 +1,68 @@
 'use client';
 
-import React, { useState } from 'react';
-import { usePaymentStore, useToastStore } from '../../store';
+import React, { useState, useEffect } from 'react';
+import { usePaymentStore, useToastStore, useAuthStore } from '../../store';
+import { hasPermission } from '../../lib/auth/rbac';
 
 export const AdminFinanceSection: React.FC = () => {
-  const { dues, ledger, recordPayment } = usePaymentStore();
+  const {
+    dues,
+    ledger,
+    adminDues,
+    adminPayments,
+    maintenanceConfig,
+    isLoadingAdminData,
+    adminError,
+    loadAdminFinance,
+    adminMarkDuePaid,
+    adminMarkDueOverdue,
+    adminWaiveLateCharge,
+    adminRecordPayment,
+  } = usePaymentStore();
   const { showToast } = useToastStore();
+  const { organizationId } = useAuthStore();
 
   const [activeTab, setActiveTab] = useState<'dues' | 'billing' | 'expenses' | 'ledger' | 'budget'>('dues');
   const [duesFilter, setDuesFilter] = useState<'all' | 'paid' | 'partial' | 'unpaid'>('all');
-  const [selectedFlat, setSelectedFlat] = useState('A-101');
+  const [selectedFlat, setSelectedFlat] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [modalDueId, setModalDueId] = useState('');
+  const [modalAmount, setModalAmount] = useState('');
+  const [modalMethod, setModalMethod] = useState<'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'CARD'>('CASH');
+  const [waiveReason, setWaiveReason] = useState('');
+  const [stopFutureCharges, setStopFutureCharges] = useState(true);
+  const [waiverBusy, setWaiverBusy] = useState(false);
+  const [waiverError, setWaiverError] = useState<string | null>(null);
+  const [selectedDueForWaiver, setSelectedDueForWaiver] = useState<string | null>(null);
 
-  // Expenses State
-  const [expenses, setExpenses] = useState([
-    { id: '1', date: '25 Sep 2026', voucher: 'VCH-2026-089', vendor: 'SecureForce Services', category: 'Security Guard Wages', invoice: 'INV-SF-9912', method: 'NEFT Bank Transfer', amount: 84000, status: 'Paid' },
-    { id: '2', date: '20 Sep 2026', voucher: 'VCH-2026-088', vendor: 'Tata Power DDL', category: 'Common Electricity (Pumps/Lifts)', invoice: 'TP-SEP-3341', method: 'Direct Auto-Debit', amount: 42500, status: 'Paid' },
-    { id: '3', date: '18 Sep 2026', voucher: 'VCH-2026-087', vendor: 'Otis Elevator AMC', category: 'Quarterly AMC Maintenance', invoice: 'OTIS-Q3-102', method: 'RTGS Transfer', amount: 28000, status: 'Paid' },
-    { id: '4', date: '12 Sep 2026', voucher: 'VCH-2026-086', vendor: 'AquaFlow Care', category: 'Overhead Tank Chemical Cleaning', invoice: 'AQ-1092', method: 'Cheque #881204', amount: 14500, status: 'Paid' }
-  ]);
+  const canWaiveLateCharge = hasPermission('late_charge:waive');
+  const canManageDues = hasPermission('due:manage');
+  const canManagePayments = hasPermission('payment:manage');
 
-  // Billing Cycles
-  const [billingCycles, setBillingCycles] = useState([
-    { id: '1', period: 'September 2026', generated: '01 Sep 2026', total: '₹2,36,400', collected: '₹1,94,100 (82%)', status: 'Active' },
-    { id: '2', period: 'August 2026', generated: '01 Aug 2026', total: '₹2,36,400', collected: '₹2,31,900 (98%)', status: 'Closed' },
-    { id: '3', period: 'July 2026', generated: '01 Jul 2026', total: '₹2,36,400', collected: '₹2,36,400 (100%)', status: 'Audited' }
-  ]);
+  useEffect(() => {
+    if (organizationId) {
+      loadAdminFinance();
+    }
+  }, [organizationId, loadAdminFinance]);
 
-  // Budget vs Actual
-  const budgetItems = [
-    { head: 'Manned Security Roster', budget: 1000000, actual: 840000, pct: 84 },
-    { head: 'Common Utilities & Electricity', budget: 600000, actual: 510000, pct: 85 },
-    { head: 'AMC & Equipment Maintenance', budget: 450000, actual: 336000, pct: 75 },
-    { head: 'Housekeeping & Gardening', budget: 350000, actual: 290000, pct: 83 },
-    { head: 'Administrative & Software', budget: 150000, actual: 120000, pct: 80 }
-  ];
+  // Expenses State (dynamic)
+  const [expenses, setExpenses] = useState<
+    { id: string; date: string; voucher: string; vendor: string; category: string; invoice: string; method: string; amount: number; status: string }[]
+  >([]);
 
-  const totalCollected = 194100;
-  const pendingDues = 42300;
-  const totalExpenses = 169000;
-  const netSurplus = 25100;
+  // Billing Cycles (dynamic)
+  const [billingCycles, setBillingCycles] = useState<
+    { id: string; period: string; generated: string; total: string; collected: string; status: string }[]
+  >([]);
+
+  // Budget vs Actual (dynamic)
+  const budgetItems: { head: string; budget: number; actual: number; pct: number }[] = [];
+
+  const totalCollected = 0;
+  const pendingDues = 0;
+  const totalExpenses = 0;
+  const netSurplus = 0;
 
   const filteredDues = dues.filter((d) => {
     if (duesFilter === 'all') return true;
@@ -71,6 +93,12 @@ export const AdminFinanceSection: React.FC = () => {
         </div>
       </div>
 
+      {selectedDueForWaiver && <div className="modal-overlay"><div className="modal-dialog" role="dialog" aria-modal="true" aria-label="Waive Late Charge"><form onSubmit={async event => {
+        event.preventDefault(); if (waiverBusy) return; setWaiverBusy(true); setWaiverError(null);
+        try { await adminWaiveLateCharge(selectedDueForWaiver, waiveReason.trim() || 'Administrative waiver', stopFutureCharges); setSelectedDueForWaiver(null); showToast('Late fees waived. Original maintenance bill remains payable.'); }
+        catch (reason) { setWaiverError(reason instanceof Error ? reason.message : 'Unable to waive late fees'); }
+        finally { setWaiverBusy(false); }
+      }}><div className="modal-header"><h3>Waive Late Charge</h3></div><div className="modal-body"><p>Remove currently accrued late fees. Original maintenance amount stays payable.</p><label className="settings-field">Reason<textarea className="form-textarea" maxLength={500} value={waiveReason} onChange={event => setWaiveReason(event.target.value)} /></label><label><input type="checkbox" checked={stopFutureCharges} onChange={event => setStopFutureCharges(event.target.checked)} /> Stop further late charges for this bill</label>{waiverError && <p role="alert">{waiverError}</p>}</div><div className="modal-footer"><button type="button" className="btn btn-ghost btn-sm" disabled={waiverBusy} onClick={() => setSelectedDueForWaiver(null)}>Cancel</button><button className="btn btn-primary btn-sm" disabled={waiverBusy}>{waiverBusy ? 'Saving…' : 'Confirm Waiver'}</button></div></form></div></div>}
       {/* Income vs Expense Summary Strip */}
       <div className="finance-summary-strip">
         <div className="kpi-card kpi-pine">
@@ -235,15 +263,27 @@ export const AdminFinanceSection: React.FC = () => {
                       </td>
                       <td>
                         <div className="table-action-btns">
-                          {d.status !== 'paid' && (
+                          {d.status !== 'paid' && canManageDues && d.id && (
                             <button
                               className="btn btn-xs btn-primary"
-                              onClick={() => {
-                                recordPayment(d.flat, d.amountDue - d.amountPaid, 'admin-cash');
-                                showToast(`Payment recorded for Flat ${d.flat}!`);
+                              onClick={async () => {
+                                try {
+                                  await adminMarkDuePaid(d.id!);
+                                  showToast(`Due for Unit ${d.flat} marked as PAID.`);
+                                } catch (err: any) {
+                                  showToast(err.backendMessage || 'Failed to update due status');
+                                }
                               }}
                             >
-                              Record Payment
+                              Mark Paid
+                            </button>
+                          )}
+                          {d.lateCharge && d.lateCharge > 0 && canWaiveLateCharge && d.id && (
+                            <button
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => { setSelectedDueForWaiver(d.id!); setWaiveReason(''); setStopFutureCharges(true); setWaiverError(null); }}
+                            >
+                              Waive Late Charge
                             </button>
                           )}
                           <button
@@ -318,20 +358,20 @@ export const AdminFinanceSection: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <span>Base Maintenance Rate</span>
-                  <strong>₹3.50 / sq.ft. monthly</strong>
+                  <span>Base Maintenance Amount</span>
+                  <strong>{maintenanceConfig ? `₹${maintenanceConfig.base_maintenance_amount} / flat monthly` : '—'}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
                   <span>Sinking Fund Reserve</span>
-                  <strong>₹500 / flat monthly</strong>
+                  <strong>—</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
                   <span>Covered Car Parking Slot</span>
-                  <strong>₹300 / bay monthly</strong>
+                  <strong>—</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0' }}>
                   <span>Clubhouse Maintenance Fee</span>
-                  <strong>₹450 / flat monthly</strong>
+                  <strong>—</strong>
                 </div>
               </div>
             </div>
@@ -410,16 +450,19 @@ export const AdminFinanceSection: React.FC = () => {
                   onChange={(e) => setSelectedFlat(e.target.value)}
                   style={{ minWidth: '160px', fontWeight: 700 }}
                 >
-                  <option value="A-101">Flat A-101</option>
-                  <option value="A-102">Flat A-102</option>
-                  <option value="A-201">Flat A-201</option>
-                  <option value="A-202">Flat A-202</option>
-                  <option value="B-303">Flat B-303</option>
-                  <option value="B-501">Flat B-501</option>
+                  <option value="">Select Unit</option>
+                  {Array.from(new Set(dues.map((d) => d.flat))).map((flat) => (
+                    <option key={flat} value={flat}>
+                      Flat {flat}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div style={{ fontSize: '0.8125rem', color: 'var(--neutral)' }}>
-                Account Dossier: <strong>Aarav Sharma</strong> • Balance: <span style={{ color: 'var(--success)', fontWeight: 700 }}>₹0.00 Cleared</span>
+                Account Dossier: <strong>{dues.find((d) => d.flat === selectedFlat)?.residentName || '—'}</strong> • Balance:{' '}
+                <span style={{ color: 'var(--success)', fontWeight: 700 }}>
+                  ₹{((dues.find((d) => d.flat === selectedFlat)?.amountDue ?? 0) - (dues.find((d) => d.flat === selectedFlat)?.amountPaid ?? 0)).toLocaleString('en-IN')}
+                </span>
               </div>
             </div>
 
@@ -450,14 +493,9 @@ export const AdminFinanceSection: React.FC = () => {
               <tbody>
                 {flatLedger.length === 0 ? (
                   <tr>
-                    <td>10 Sep 2026</td>
-                    <td><code>TXN-991204</code></td>
-                    <td><span className="badge badge-success">Credit</span></td>
-                    <td>Maintenance Payment via UPI Auto-Pay</td>
-                    <td>—</td>
-                    <td style={{ color: 'var(--success)', fontWeight: 700 }}>₹4,500</td>
-                    <td>₹0.00</td>
-                    <td><button className="btn btn-xs btn-ghost" onClick={() => showToast('Receipt downloaded.')}>PDF</button></td>
+                    <td colSpan={8} style={{ textAlign: 'center', color: 'var(--neutral)' }}>
+                      No ledger transactions found.
+                    </td>
                   </tr>
                 ) : (
                   flatLedger.map((l, i) => (
@@ -549,25 +587,49 @@ export const AdminFinanceSection: React.FC = () => {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Unit / Flat</label>
-                <select className="form-select" defaultValue="A-101">
-                  <option value="A-101">Flat A-101 (Aarav Sharma)</option>
-                  <option value="A-102">Flat A-102 (Priya Mukherjee)</option>
-                  <option value="A-201">Flat A-201 (Deepak Verma)</option>
+                <label className="form-label">Associated Maintenance Due</label>
+                <select
+                  className="form-select"
+                  value={modalDueId}
+                  onChange={(e) => {
+                    setModalDueId(e.target.value);
+                    const selected = adminDues.find((d) => d.id === e.target.value);
+                    if (selected) {
+                      const outstanding = Number(selected.calculated_amount) + Number(selected.late_charge) - Number(selected.late_charge_waived);
+                      setModalAmount(outstanding > 0 ? String(outstanding) : '0');
+                    }
+                  }}
+                >
+                  <option value="">Select a pending due...</option>
+                  {adminDues.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      Unit {d.flat_id ? d.flat_id.slice(0, 6) : 'N/A'} — Due: ₹{d.calculated_amount} ({d.status})
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Payment Amount (₹)</label>
-                  <input type="number" className="form-control" defaultValue="4500" />
+                  <input
+                    type="number"
+                    className="form-control"
+                    value={modalAmount}
+                    onChange={(e) => setModalAmount(e.target.value)}
+                  />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Payment Channel</label>
-                  <select className="form-select">
-                    <option>UPI / QR Scan</option>
-                    <option>NEFT / IMPS Transfer</option>
-                    <option>Cheque Deposit</option>
-                    <option>Cash at Office</option>
+                  <label className="form-label">Payment Method</label>
+                  <select
+                    className="form-select"
+                    value={modalMethod}
+                    onChange={(e) => setModalMethod(e.target.value as any)}
+                  >
+                    <option value="CASH">CASH (Office Deposit)</option>
+                    <option value="UPI">UPI (Direct Transfer/QR)</option>
+                    <option value="NET_BANKING">NET_BANKING (NEFT/RTGS)</option>
+                    <option value="CHEQUE">CHEQUE</option>
+                    <option value="CARD">CARD (POS)</option>
                   </select>
                 </div>
               </div>
@@ -578,9 +640,28 @@ export const AdminFinanceSection: React.FC = () => {
               </button>
               <button
                 className="btn btn-primary btn-sm"
-                onClick={() => {
-                  showToast('Payment credited & instant WhatsApp receipt dispatched!');
-                  setShowPaymentModal(false);
+                onClick={async () => {
+                  if (!modalDueId) {
+                    showToast('Please select an active maintenance due.');
+                    return;
+                  }
+                  if (!modalAmount || Number(modalAmount) <= 0) {
+                    showToast('Please enter a valid payment amount.');
+                    return;
+                  }
+                  try {
+                    const due = adminDues.find((d) => d.id === modalDueId);
+                    await adminRecordPayment({
+                      maintenance_due_id: modalDueId,
+                      amount: Number(modalAmount),
+                      payment_method: modalMethod,
+                      flat_id: due?.flat_id,
+                    });
+                    showToast('Internal payment record created successfully!');
+                    setShowPaymentModal(false);
+                  } catch (err: any) {
+                    showToast(err.backendMessage || 'Failed to record payment');
+                  }
                 }}
               >
                 Record Payment

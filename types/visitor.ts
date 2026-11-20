@@ -7,6 +7,10 @@ export interface Visitor {
   purpose: string;
   flat: string;
   status: VisitorStatus;
+  visitDate?: string;
+  validityStart?: string;
+  validityEnd?: string;
+  passStatus?: 'ACTIVE' | 'EXPIRED' | 'REVOKED';
   requestedAt?: string;
   approvedAt?: string;
   checkedInAt?: string;
@@ -39,7 +43,11 @@ export interface PreApprovedPass {
   validityDisplay: string;
   gate: string;
   vehicleNo?: string | null;
-  status: 'Active' | 'Checked-In' | 'Expired' | 'Revoked';
-  createdAt: string;
-  qrToken: string;
+  status?: 'Active' | 'Checked-In' | 'Expired' | 'Revoked';
+  createdAt?: string;
+  qrToken?: string;
+  qrImageData?: string;
+  autoShare?: boolean;
+  category?: string;
+  visitId?: string;
 }

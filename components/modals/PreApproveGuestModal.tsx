@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import clsx from 'clsx';
-import { useResidentStore, useVisitorStore, useModalStore, useToastStore } from '../../store';
+import { parseDate } from '@internationalized/date';
+import { useResidentStore, useVisitorStore, useModalStore, useToastStore, useAuthStore } from '../../store';
 import { Switch } from '../common/Switch';
 import {
   IconUser,
@@ -13,17 +14,18 @@ import {
   IconClose,
   IconPhone,
   IconCar,
-  IconCalendar,
-  IconClock,
-  IconDoor,
   IconQrCode
 } from '../common/Icons';
+import { GuestPassDatePicker, GuestPassGateSelect } from './GuestPassControls';
+import { localDateValue } from '../../lib/visitors/visit-window';
+import styles from './PreApproveGuestModal.module.css';
 
 const guestTypes = [
-  { id: 'Family / Friend', icon: IconUser, title: 'Guest & Family', sub: 'Social visit' },
-  { id: 'Home Delivery', icon: IconPackage, title: 'Delivery', sub: 'Swiggy / Amazon' },
-  { id: 'Cab / Driver', icon: IconTaxi, title: 'Cab / Ride', sub: 'Uber / Ola / Driver' },
-  { id: 'Home Repair', icon: IconWrench, title: 'Home Service', sub: 'Technician / Maid' }
+  { id: 'Family / Friend', icon: IconUser, label: 'Guest & Family' },
+  { id: 'Home Delivery', icon: IconPackage, label: 'Delivery' },
+  { id: 'Cab / Driver', icon: IconTaxi, label: 'Cab / Ride' },
+  { id: 'Home Repair', icon: IconWrench, label: 'Service' },
+  { id: 'Other', icon: IconShield, label: 'Other' }
 ];
 
 const durationOptions = [
@@ -35,302 +37,253 @@ const durationOptions = [
 
 export const PreApproveGuestModal: React.FC = () => {
   const { resident } = useResidentStore();
-  const { createPreApprovedPass } = useVisitorStore();
-  const { closeModal, openModal } = useModalStore();
+  const { preApproveVisit } = useVisitorStore();
+  const { openModal, closeModal } = useModalStore();
   const { showToast } = useToastStore();
+  const { organizationId } = useAuthStore();
 
   const [purpose, setPurpose] = useState('Family / Friend');
+  const [otherPurpose, setOtherPurpose] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [vehicle, setVehicle] = useState('');
   const [duration, setDuration] = useState('Today Full Day');
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(
-    new Date(Date.now() + 86400000).toISOString().split('T')[0]
-  );
-  const [gate, setGate] = useState('All Gates (Gate 01 & 02)');
+  const [startDate, setStartDate] = useState(() => localDateValue());
+  const [endDate, setEndDate] = useState(() => localDateValue());
+  const [gate, setGate] = useState('All Society Gates');
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const gatesList = useMemo(() => {
+    let list: string[] = [];
+    if (typeof window !== 'undefined' && organizationId) {
+      try {
+        const stored = localStorage.getItem(`societyos_gates_${organizationId}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            list = parsed
+              .filter((g: { status?: string }) => g && g.status !== 'Inactive')
+              .map((g: { name?: string; code?: string }) => g.name || g.code)
+              .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+          }
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    return [...new Set(['All Society Gates', ...list])];
+  }, [organizationId]);
+  const selectedGate = gatesList.includes(gate) ? gate : gatesList[0];
 
   const handleDurationSelect = (dur: string) => {
     setDuration(dur);
-    const now = new Date();
-    setStartDate(now.toISOString().split('T')[0]);
+    const today = localDateValue();
+    setStartDate(today);
     if (dur === 'Next 4 Hours' || dur === 'Today Full Day') {
-      setEndDate(now.toISOString().split('T')[0]);
+      setEndDate(dur === 'Next 4 Hours' ? localDateValue(new Date(Date.now() + 4 * 3600000)) : today);
     } else if (dur === '2 Days Pass') {
-      setEndDate(new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0]);
+      setEndDate(parseDate(today).add({ days: 1 }).toString());
     } else if (dur === 'Weekly Pass') {
-      setEndDate(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
+      setEndDate(parseDate(today).add({ days: 6 }).toString());
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      alert('Please enter the guest full name.');
-      return;
-    }
-    if (!phone.trim()) {
-      alert('Please enter guest mobile phone number.');
+    if (isSubmitting) return;
+
+    const trimmedName = name.trim();
+    const rawPhoneDigits = phone.replace(/\D/g, '');
+    const cleanDigits = rawPhoneDigits.length > 10 ? rawPhoneDigits.slice(-10) : rawPhoneDigits;
+
+    if (!trimmedName) {
+      setErrorMsg('Please enter the guest full name.');
       return;
     }
 
-    const createdPass = createPreApprovedPass({
-      guestName: name.trim(),
-      phone: phone.trim(),
-      purpose,
-      flat: resident.flat,
-      resident: resident.name,
-      startDate,
-      endDate,
-      validityDisplay: `${startDate} to ${endDate} (${duration})`,
-      gate,
-      vehicleNo: vehicle.trim() || null
-    });
+    // 10-digit mobile number validation
+    if (cleanDigits.length !== 10 || !/^[6-9]\d{9}$/.test(cleanDigits)) {
+      setErrorMsg('Please enter a valid 10-digit mobile number (e.g. 9876543210).');
+      return;
+    }
 
-    showToast(`Pre-approved FastPass ${createdPass.passCode} generated for ${name}!`);
-    openModal('qrPassCard', createdPass);
+    // Vehicle registration number plate validation (if entered)
+    const cleanPlate = vehicle.replace(/[\s-]/g, '').toUpperCase();
+    if (cleanPlate) {
+      const plateRegex = /^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}$/;
+      if (!plateRegex.test(cleanPlate)) {
+        setErrorMsg('Invalid vehicle plate format. Example: MH02AB1234 or DL1CAB1234.');
+        return;
+      }
+    }
+
+    if (purpose === 'Other' && !otherPurpose.trim()) {
+      setErrorMsg('Please specify the visitor purpose.');
+      return;
+    }
+
+    if (startDate < localDateValue() || endDate < startDate) {
+      setErrorMsg('Choose a date range starting today or later, with the end on or after the start.');
+      return;
+    }
+
+    setErrorMsg(null);
+    setIsSubmitting(true);
+
+    try {
+      const finalPurpose = purpose === 'Other' ? otherPurpose.trim() : purpose;
+      const entry = startDate === localDateValue() ? new Date() : new Date(`${startDate}T00:00:00`);
+      const end = duration === 'Next 4 Hours'
+        ? new Date(entry.getTime() + 4 * 3600000)
+        : new Date(`${parseDate(endDate).add({ days: 1 }).toString()}T00:00:00`);
+
+      const visit = await preApproveVisit({
+        name: trimmedName,
+        mobile: cleanDigits,
+        visit_purpose: finalPurpose,
+        expected_entry_time: entry.toISOString(),
+        validity_end: end.toISOString(),
+        send_whatsapp: sendWhatsApp,
+      });
+
+      const { getVisitPass } = await import('../../lib/api/visitors.api');
+      const passDetails = await getVisitPass(visit.id);
+      const passCode = passDetails.passCode;
+      const validityDisplay = `${new Date(passDetails.validityStart).toLocaleString()} – ${new Date(passDetails.validityEnd).toLocaleString()}`;
+
+      showToast(`Visitor ${trimmedName} pre-approved successfully!`);
+
+      // Open digital ticket pass modal with smooth bottom sheet
+      openModal('qrPassCard', {
+        id: passDetails.passId,
+        visitId: visit.id,
+        qrToken: passDetails.qrToken,
+        qrImageData: passDetails.qrImageData,
+        passCode,
+        guestName: trimmedName,
+        phone: cleanDigits,
+        flat: resident?.flat && resident.flat !== 'No flat' ? resident.flat : 'Registered Unit',
+        resident: resident?.name || 'Resident',
+        validityDisplay,
+        gate: selectedGate,
+        vehicleNo: cleanPlate || 'Logged at Gate',
+        category: finalPurpose,
+        autoShare: sendWhatsApp,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to pre-approve visitor. Please try again.';
+      setErrorMsg(msg);
+      showToast(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <div
-      className="mobile-modal-overlay"
-      id="preapprove-modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeModal();
-      }}
-    >
-      <div className="mobile-bottom-sheet">
-        <div className="sheet-handle"></div>
-
-        <div className="drawer-header">
-          <div className="drawer-header-left">
-            <div className="drawer-header-icon saffron">
-              <IconShield size={20} />
-            </div>
-            <div className="drawer-header-text">
-              <h3>Pre-approve Guest Pass</h3>
-              <p>Instant gate clearance with WhatsApp sync</p>
-            </div>
+    <div className="mobile-modal-overlay" id="preapprove-modal" onClick={event => {
+      if (event.target === event.currentTarget && !isSubmitting) closeModal();
+    }}>
+      <div className={clsx('mobile-bottom-sheet', styles.sheet)} role="dialog" aria-modal="true" aria-labelledby="guest-pass-title">
+        <header className={styles.header}>
+          <span className={styles.headerIcon}><IconShield size={22} /></span>
+          <div className={styles.headerCopy}>
+            <h3 id="guest-pass-title">Pre-approve Guest Pass</h3>
+            <p>Plan a visit and share a digital entry pass.</p>
           </div>
-          <button className="drawer-close-btn" onClick={closeModal} aria-label="Close">
+          <button type="button" className={styles.close} onClick={closeModal} disabled={isSubmitting} aria-label="Close guest pass">
             <IconClose size={18} />
           </button>
-        </div>
+        </header>
 
-        {/* Guest Category Selector */}
-        <div>
-          <div className="drawer-section-title">
-            <span>Visitor Category</span>
-            <span style={{ color: 'var(--pine)', fontSize: '0.6875rem' }}>1-tap approval</span>
-          </div>
-          <div className="drawer-visual-grid">
-            {guestTypes.map((item) => {
-              const IconComp = item.icon;
-              return (
-                <div
-                  key={item.id}
-                  className={clsx(
-                    'drawer-visual-card saffron',
-                    purpose === item.id && 'active'
-                  )}
-                  onClick={() => setPurpose(item.id)}
-                >
-                  <div className="drawer-visual-icon">
-                    <IconComp size={22} />
-                  </div>
-                  <div className="drawer-visual-label">
-                    <strong>{item.title}</strong>
-                    <span>{item.sub}</span>
-                  </div>
+        <form onSubmit={handleSubmit}>
+          <div className={styles.body}>
+            <fieldset className={styles.section} disabled={isSubmitting}>
+              <legend className={styles.sectionTitle}>Visitor category</legend>
+              <div className={styles.categories}>
+                {guestTypes.map(item => {
+                  const Icon = item.icon;
+                  return <button key={item.id} type="button" aria-pressed={purpose === item.id}
+                    className={clsx(styles.category, purpose === item.id && styles.categoryActive)} onClick={() => setPurpose(item.id)}>
+                    <Icon size={16} />{item.label}
+                  </button>;
+                })}
+              </div>
+              {purpose === 'Other' && <label className={styles.field}>
+                <span className={styles.label}>Visit purpose</span>
+                <input className={styles.input} style={{ paddingLeft: 12 }} placeholder="e.g. Tutor or property inspection"
+                  value={otherPurpose} onChange={event => setOtherPurpose(event.target.value)} required maxLength={255} />
+              </label>}
+            </fieldset>
+
+            <fieldset className={styles.section} disabled={isSubmitting}>
+              <legend className={styles.sectionTitle}>Guest details</legend>
+              <label className={styles.field} htmlFor="guest-name-input">
+                <span className={styles.label}>Full name</span>
+                <div className={styles.inputWrap}>
+                  <span className={styles.inputIcon}><IconUser size={17} /></span>
+                  <input className={styles.input} id="guest-name-input" placeholder="Guest's full name" value={name}
+                    onChange={event => setName(event.target.value)} autoComplete="name" required maxLength={255} />
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </label>
+              <div className={styles.grid}>
+                <label className={styles.field} htmlFor="guest-phone-input">
+                  <span className={styles.label}>Mobile number</span>
+                  <div className={styles.inputWrap}>
+                    <span className={styles.inputIcon}><IconPhone size={17} /></span>
+                    <input className={styles.input} id="guest-phone-input" placeholder="10-digit number" type="tel" inputMode="numeric"
+                      autoComplete="tel-national" maxLength={10} value={phone} required
+                      onChange={event => setPhone(event.target.value.replace(/\D/g, '').slice(0, 10))} />
+                  </div>
+                </label>
+                <label className={styles.field} htmlFor="guest-vehicle-input">
+                  <span className={styles.label}>Vehicle <span className={styles.hint}>(optional)</span></span>
+                  <div className={styles.inputWrap}>
+                    <span className={styles.inputIcon}><IconCar size={17} /></span>
+                    <input className={styles.input} id="guest-vehicle-input" placeholder="MH02AB1234" value={vehicle}
+                      onChange={event => setVehicle(event.target.value.toUpperCase())} maxLength={15} />
+                  </div>
+                </label>
+              </div>
+            </fieldset>
 
-        {/* Guest Details Input Cards */}
-        <div className="form-field-wrapper">
-          <div className="form-field-label">
-            <span>
-              Guest Full Name <span className="required-dot">*</span>
-            </span>
-            <span style={{ fontSize: '0.65rem', color: 'var(--neutral)', fontWeight: 400 }}>
-              As per ID card
-            </span>
-          </div>
-          <div className="input-icon-group">
-            <span className="input-leading-icon">
-              <IconUser size={16} />
-            </span>
-            <input
-              className="form-control-luxury"
-              id="guest-name-input"
-              placeholder="e.g. Sameer Kapoor"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoFocus
-            />
-          </div>
-        </div>
+            <section className={styles.section} aria-labelledby="guest-visit-window">
+              <h4 id="guest-visit-window" style={{ fontSize: '0.8125rem', margin: 0 }}>Visit dates</h4>
+              <div className={styles.durations} aria-label="Quick visit duration">
+                {durationOptions.map(option => <button key={option.id} type="button" disabled={isSubmitting}
+                  className={clsx(styles.preset, duration === option.id && styles.presetActive)}
+                  aria-pressed={duration === option.id} onClick={() => handleDurationSelect(option.id)}>{option.label}</button>)}
+              </div>
+              <div className={styles.grid}>
+                <GuestPassDatePicker id="guest-start-date" label="Valid from" value={startDate} min={localDateValue()} disabled={isSubmitting}
+                  onChange={date => { setStartDate(date); if (endDate < date) setEndDate(date); setDuration('Custom'); }} />
+                <GuestPassDatePicker id="guest-end-date" label="Valid until" value={endDate} min={startDate} disabled={isSubmitting}
+                  onChange={date => { setEndDate(date); setDuration('Custom'); }} />
+              </div>
+              <p className={styles.hint}>{duration === 'Next 4 Hours' ? 'Valid for four hours from now.' : 'Valid through the end of the selected date.'}</p>
+            </section>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-          <div className="form-field-wrapper" style={{ marginBottom: 0 }}>
-            <div className="form-field-label">
-              <span>
-                Guest Phone <span className="required-dot">*</span>
-              </span>
-            </div>
-            <div className="input-icon-group">
-              <span className="input-leading-icon">
-                <IconPhone size={16} />
-              </span>
-              <input
-                className="form-control-luxury"
-                id="guest-phone-input"
-                placeholder="+91 98765-43210"
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          <div className="form-field-wrapper" style={{ marginBottom: 0 }}>
-            <div className="form-field-label">
-              <span>Vehicle Plate</span>
-            </div>
-            <div className="input-icon-group">
-              <span className="input-leading-icon">
-                <IconCar size={16} />
-              </span>
-              <input
-                className="form-control-luxury plate-input"
-                id="guest-vehicle-input"
-                placeholder="MH-02-AB-1234"
-                style={{ textTransform: 'uppercase' }}
-                value={vehicle}
-                onChange={(e) => setVehicle(e.target.value)}
-              />
-            </div>
-          </div>
-        </div>
+            <GuestPassGateSelect value={selectedGate} options={gatesList} disabled={isSubmitting} onChange={setGate} />
 
-        {/* Visiting Dates & Validity Window */}
-        <div className="form-field-wrapper" style={{ marginBottom: '8px' }}>
-          <div className="drawer-section-title">
-            <span>Visiting Window & Date Range</span>
-            <span style={{ color: 'var(--pine)', fontSize: '0.6875rem' }}>FastPass</span>
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '6px',
-              marginBottom: '8px'
-            }}
-          >
-            {durationOptions.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={clsx(
-                  'priority-pill',
-                  duration === opt.id && 'active low'
-                )}
-                onClick={() => handleDurationSelect(opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
+            <div className={styles.optIn}>
+              <label htmlFor="guest-whatsapp-toggle">
+                <strong>WhatsApp digital pass</strong>
+                <p className={styles.hint}>Ask SocietyOS WhatsApp to send the pass. Manual sharing stays available.</p>
+              </label>
+              <Switch id="guest-whatsapp-toggle" aria-label="WhatsApp digital pass" checked={sendWhatsApp}
+                disabled={isSubmitting} onChange={event => setSendWhatsApp(event.target.checked)} />
+            </div>
+            {errorMsg && <p className={styles.error} role="alert">{errorMsg}</p>}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            <div className="input-icon-group">
-              <span className="input-leading-icon">
-                <IconCalendar size={16} />
-              </span>
-              <input
-                type="date"
-                className="form-control-luxury"
-                id="guest-start-date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                style={{ paddingLeft: '34px' }}
-              />
-            </div>
-            <div className="input-icon-group">
-              <span className="input-leading-icon">
-                <IconClock size={16} />
-              </span>
-              <input
-                type="date"
-                className="form-control-luxury"
-                id="guest-end-date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                style={{ paddingLeft: '34px' }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Entry Gate Restriction */}
-        <div className="form-field-wrapper" style={{ marginBottom: '8px' }}>
-          <div className="form-field-label">
-            <span>Authorized Entry Gate</span>
-          </div>
-          <div className="input-icon-group">
-            <span className="input-leading-icon">
-              <IconDoor size={16} />
-            </span>
-            <select
-              className="form-control-luxury"
-              id="guest-gate-select"
-              style={{ fontSize: '0.8125rem', paddingLeft: '36px' }}
-              value={gate}
-              onChange={(e) => setGate(e.target.value)}
-            >
-              <option value="All Gates (Gate 01 & 02)">All Gates (Gate 01 • Main & Gate 02 • Back)</option>
-              <option value="Gate 01 • North Booth">Gate 01 • North Booth (Main Gate)</option>
-              <option value="Gate 02 • Back Gate">Gate 02 • Back Gate</option>
-              <option value="Service & Delivery Gate #3">Service & Delivery Gate #3</option>
-            </select>
-          </div>
-        </div>
-
-        {/* WhatsApp Pass Auto-Send Option */}
-        <div className="whatsapp-optin-box" style={{ marginBottom: '8px', padding: '8px 12px' }}>
-          <div className="whatsapp-optin-info">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="#25d366">
-              <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-5.805 1.554z" />
-            </svg>
-            <div className="whatsapp-optin-text">
-              <h5 style={{ fontSize: '0.75rem' }}>WhatsApp Digital QR Pass</h5>
-              <p style={{ fontSize: '0.65rem' }}>Generate shareable link & invitation card</p>
-            </div>
-          </div>
-          <Switch
-            id="guest-whatsapp-toggle"
-            checked={sendWhatsApp}
-            onChange={(e) => setSendWhatsApp(e.target.checked)}
-          />
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={closeModal}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            style={{ flex: 1.6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            onClick={handleSubmit}
-          >
-            <IconQrCode size={18} />
-            <span>Generate QR Pass</span>
-          </button>
-        </div>
+          <footer className={styles.actions}>
+            <button type="button" className="btn btn-ghost" onClick={closeModal} disabled={isSubmitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={isSubmitting} id="btn-submit-preapprove">
+              <IconQrCode size={18} /><span>{isSubmitting ? 'Creating pass…' : 'Create guest pass'}</span>
+            </button>
+          </footer>
+        </form>
       </div>
     </div>
   );

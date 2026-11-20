@@ -1,0 +1,286 @@
+/* ── Hero Section Styles ────────────────────────────────────────── */
+
+.heroSection {
+  padding: 64px 24px 60px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 52px;
+  align-items: center;
+  margin-bottom: 60px;
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+}
+
+.heroBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12.5px;
+  font-weight: 750;
+  margin-bottom: 20px;
+  width: fit-content;
+  border: 1px solid #cce8e2;
+  box-shadow: 0 2px 8px rgba(3, 95, 79, 0.08);
+}
+
+.heroHeadline {
+  font-size: clamp(36px, 4.2vw, 56px);
+  font-weight: 850;
+  color: #0f172a;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  margin: 0 0 20px;
+}
+
+.heroHighlight {
+  color: #035F4F;
+  background: linear-gradient(135deg, #035F4F 0%, #16A085 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.heroLede {
+  font-size: 17px;
+  color: #475569;
+  line-height: 1.6;
+  max-width: 44ch;
+  margin: 0 0 32px;
+}
+
+.heroCtaRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.btnPrimary {
+  padding: 14px 28px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #035F4F 0%, #02473b 100%);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 750;
+  text-decoration: none;
+  transition: all 0.25s ease;
+  box-shadow: 0 8px 24px -4px rgba(3, 95, 79, 0.35);
+}
+
+.btnPrimary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -4px rgba(3, 95, 79, 0.45);
+}
+
+.btnSecondary {
+  padding: 14px 24px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 14.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.btnSecondary:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.heroCheckmarks {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+.checkItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkDot {
+  color: #10b981;
+  font-weight: 800;
+}
+
+/* ── Right Hero Image Visual with Telemetry Chips ── */
+.heroVisualWrapper {
+  position: relative;
+}
+
+.visualCard {
+  position: relative;
+  background: #ffffff;
+  border-radius: 32px;
+  border: 1px solid #e2e8f0;
+  padding: 14px;
+  box-shadow: 0 30px 70px -15px rgba(3, 95, 79, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.03);
+}
+
+.imageFrame {
+  position: relative;
+  border-radius: 22px;
+  overflow: hidden;
+  aspect-ratio: 680 / 440;
+}
+
+.heroImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Floating Telemetry Chips */
+.floatingChip {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+  padding: 9px 15px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 12px 28px -6px rgba(15, 23, 42, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  animation: floatChip 4s ease-in-out infinite alternate;
+}
+
+.chipSolar {
+  top: 7%;
+  left: 6%;
+}
+
+.chipVisitors {
+  top: 12%;
+  right: 6%;
+  animation-delay: 1.2s;
+}
+
+.chipGate {
+  bottom: 22%;
+  left: 8%;
+  animation-delay: 2.2s;
+}
+
+.chipDues {
+  bottom: 10%;
+  right: 8%;
+  animation-delay: 0.8s;
+}
+
+@keyframes floatChip {
+  from { transform: translateY(0); }
+  to { transform: translateY(-6px); }
+}
+
+.chipIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.chipSolarIcon { background: #e6f4f1; color: #035F4F; }
+.chipVisitorsIcon { background: #ccfbf1; color: #0f766e; }
+.chipGateIcon { background: #dcfce7; color: #15803d; }
+.chipDuesIcon { background: #ffedd5; color: #c2410c; }
+
+.chipLabel {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.chipVal {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+/* ── Trust Metrics Bar ── */
+.metricsBar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  padding: 26px 36px;
+  background: #ffffff;
+  border-radius: 24px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.05);
+}
+
+.metricItem {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.metricIconBox {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.metricValue {
+  font-size: 24px;
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.metricLabel {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+@media (max-width: 1024px) {
+  .heroGrid {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .metricsBar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .metricsBar {
+    grid-template-columns: 1fr;
+  }
+  .floatingChip {
+    position: static;
+    margin: 8px 0;
+  }
+}

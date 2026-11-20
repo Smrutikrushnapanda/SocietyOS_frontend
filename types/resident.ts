@@ -2,12 +2,13 @@ export interface ResidentProfile {
   id: string;
   name: string;
   avatarInitials: string;
+  photoUrl?: string | null;
   flat: string;
   building: string;
   buildingName: string;
   towerLabel: string;
   floor: number;
-  type: 'Owner' | 'Tenant';
+  type: 'Owner' | 'Tenant' | 'Family';
   flatType: string;
   phone: string;
   email: string;

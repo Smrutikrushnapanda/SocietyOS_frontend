@@ -5,117 +5,55 @@
  * Safe for Next.js SSR — all Firebase/browser APIs are guarded behind client-side checks.
  *
  * Usage:
- *   const { status, requestPermission } = usePushNotifications();
+ *   const { status, requestPermission, unregister } = usePushNotifications();
  *
  * The hook does NOT auto-request permission on mount to respect the user's intent.
  * Call requestPermission() explicitly (e.g., on a button click) to start the flow.
- *
- * Auth:
- *   The current AuthUser in the auth store has no JWT token (mock auth system).
- *   When no JWT is available, backend registration is skipped gracefully — the
- *   FCM token is still acquired and logged. Once a real JWT flow is added, pass
- *   the token via the authToken field of AuthUser and it will be used automatically.
  */
 
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import { getFirebaseApp } from '../lib/firebase/firebase';
-import { registerFCMToken, isFCMSupported, type PushRegistrationResult } from '../lib/firebase/messaging';
+import { useState, useCallback, useEffect, useSyncExternalStore } from 'react';
+import { registerFCMToken, unregisterFCMToken, isFCMSupported } from '../lib/firebase/messaging';
+import { pushSession } from '../lib/firebase/push-token-lifecycle';
 import { useAuthStore } from '../store/useAuthStore';
 
-export type PushNotificationStatus =
-  | 'idle'
-  | 'requesting'
-  | 'registered'
-  | 'permission_denied'
-  | 'unsupported'
-  | 'no_auth'
-  | 'error';
+export type PushNotificationStatus = 'idle' | 'requesting' | 'registered' | 'permission_denied' | 'unsupported' | 'no_auth' | 'error';
+interface PushState { scope: string; status: PushNotificationStatus; fcmToken: string | null; tokenId: string | null; errorMessage: string | null }
+const subscribeSupport = () => () => undefined;
+const emptyState = (scope: string): PushState => ({ scope, status: 'idle', fcmToken: null, tokenId: null, errorMessage: null });
+const currentScope = () => { const session = pushSession(useAuthStore.getState()); return session ? `${session.userId}:${session.organizationId}` : ''; };
 
-interface UsePushNotificationsResult {
-  /** Current state of the push notification registration flow. */
-  status: PushNotificationStatus;
-  /** The acquired FCM token, if registration succeeded. */
-  fcmToken: string | null;
-  /** Human-readable error message if status === 'error'. */
-  errorMessage: string | null;
-  /** Whether the current browser supports FCM. */
-  isSupported: boolean;
-  /**
-   * Trigger the permission request + FCM token registration flow.
-   * Safe to call multiple times — will no-op if already registered.
-   */
-  requestPermission: () => Promise<void>;
-}
-
-export function usePushNotifications(): UsePushNotificationsResult {
-  const [status, setStatus] = useState<PushNotificationStatus>('idle');
-  const [fcmToken, setFcmToken] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isSupported, setIsSupported] = useState(false);
-
-  const { user, isAuthenticated } = useAuthStore();
-
-  // Determine browser support on the client side only.
-  useEffect(() => {
-    setIsSupported(isFCMSupported());
-  }, []);
-
-  // Ensure the Firebase app is initialized on mount (client side only).
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      getFirebaseApp();
-    }
-  }, []);
-
+export function usePushNotifications() {
+  const userId = useAuthStore((state) => state.backendUser?.id ?? state.user?.id);
+  const organizationId = useAuthStore((state) => state.organizationId);
+  const authenticated = useAuthStore((state) => state.isAuthenticated);
+  const scope = authenticated ? `${userId}:${organizationId}` : '';
+  const [state, setState] = useState<PushState>(() => emptyState(scope));
+  const isSupported = useSyncExternalStore(subscribeSupport, isFCMSupported, () => false);
   const requestPermission = useCallback(async () => {
-    // No-op if already registered or currently requesting.
-    if (status === 'registered' || status === 'requesting') return;
-
-    if (!isFCMSupported()) {
-      setStatus('unsupported');
-      return;
-    }
-
-    setStatus('requesting');
-    setErrorMessage(null);
-
-    // Extract auth token and society ID from the current user session.
-    // AuthUser currently has no JWT (mock auth) — both will be null/undefined,
-    // causing registerFCMToken to skip backend registration gracefully.
-    const authToken: string | null =
-      (user as (typeof user & { accessToken?: string }) | null)?.accessToken ?? null;
-    const societyId: string | null = user?.societyId ?? null;
-
-    const result: PushRegistrationResult = await registerFCMToken(authToken, societyId);
-
-    switch (result.status) {
-      case 'registered':
-        setFcmToken(result.token);
-        setStatus('registered');
-        break;
-      case 'permission_denied':
-        setStatus('permission_denied');
-        break;
-      case 'unsupported':
-        setStatus('unsupported');
-        break;
-      case 'no_auth':
-        setStatus('no_auth');
-        break;
-      case 'error':
-        setStatus('error');
-        setErrorMessage(result.message);
-        break;
-    }
-  }, [status, user]);
-
-  return {
-    status,
-    fcmToken,
-    errorMessage,
-    isSupported,
-    requestPermission,
-  };
+    const started = currentScope();
+    if (!started) { setState({ ...emptyState(''), status: 'no_auth' }); return; }
+    setState({ ...emptyState(started), status: 'requesting' });
+    const result = await registerFCMToken();
+    if (currentScope() !== started) return;
+    setState(result.status === 'registered'
+      ? { scope: started, status: 'registered', fcmToken: result.token, tokenId: result.tokenId, errorMessage: null }
+      : { ...emptyState(started), status: result.status, errorMessage: result.status === 'error' ? result.message : null });
+  }, []);
+  useEffect(() => {
+    const refresh = () => {
+      if (scope && typeof Notification !== 'undefined' && Notification.permission === 'granted') void requestPermission();
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('online', refresh); };
+  }, [scope, requestPermission]);
+  const unregister = useCallback(async () => {
+    const started = currentScope();
+    try { await unregisterFCMToken(); if (currentScope() === started) setState(emptyState(started)); }
+    catch { if (currentScope() === started) setState({ ...emptyState(started), status: 'error', errorMessage: 'Push cleanup not confirmed. Retry when connected.' }); }
+  }, []);
+  return { ...(state.scope === scope ? state : emptyState(scope)), isSupported, requestPermission, unregister };
 }

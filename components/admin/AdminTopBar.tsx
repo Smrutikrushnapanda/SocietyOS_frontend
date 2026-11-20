@@ -1,17 +1,23 @@
 'use client';
 
-import React from 'react';
+import { authenticatedAdminName } from '../../lib/display';
+import React, { useEffect } from 'react';
 import { AdminSectionType } from './AdminSidebar';
 
 interface AdminTopBarProps {
   currentSection: AdminSectionType;
   onToggleSidebar: () => void;
+  sidebarExpanded: boolean;
 }
 
 const sectionTitles: Record<AdminSectionType, { title: string; subtitle: string }> = {
   overview: {
     title: 'Dashboard Overview',
     subtitle: 'Real-time society health, gate activity & alerts'
+  },
+  residents: {
+    title: 'Residents & App Access',
+    subtitle: 'Manage resident profiles, documents, and mobile application access.'
   },
   buildings: {
     title: 'Society & Buildings',
@@ -53,37 +59,67 @@ const sectionTitles: Record<AdminSectionType, { title: string; subtitle: string 
     title: 'Reports & Analytics',
     subtitle: 'Visitor footfall, complaint resolution & collection rates'
   },
+  audit: {
+    title: 'System Audit Logs',
+    subtitle: 'Tamper-evident, append-only security logs & change history'
+  },
   whatsapp: {
     title: 'WhatsApp Business API',
     subtitle: 'Automated 1-click approvals, payment links & SMS fallbacks'
   },
+  role_master: {
+    title: 'Role Master & Admin Users',
+    subtitle: 'Manage role master entries, permissions and admin user accounts'
+  },
   settings: {
     title: 'Master Settings',
-    subtitle: 'Society profile, billing rules, penalty tariffs & RBAC'
+    subtitle: 'Society profile, emergency directory, billing & branding'
+  },
+  organizations: {
+    title: 'Organization Management',
+    subtitle: 'Manage all client societies, lifecycle & SOCIETY_ADMIN provisioning'
   }
 };
 
-import { useAuthStore, useToastStore } from '../../store';
+import { useAuthStore, useToastStore, useSocietyStore } from '../../store';
 import { useRouter } from 'next/navigation';
+import { logoutCurrentSession } from '../../lib/auth/logout-session';
 
 export const AdminTopBar: React.FC<AdminTopBarProps> = ({
   currentSection,
-  onToggleSidebar
+  onToggleSidebar,
+  sidebarExpanded
 }) => {
   const meta = sectionTitles[currentSection] || sectionTitles.overview;
-  const { user, logout } = useAuthStore();
+  const { backendUser, roles, organizationId, availableOrganizations, setOrganizationId } = useAuthStore();
+  const { society } = useSocietyStore();
   const { showToast } = useToastStore();
   const router = useRouter();
 
-  const handleLogout = () => {
-    logout();
-    showToast('Logged out of Admin Console');
-    router.push('/admin/login');
+  const handleLogout = async () => {
+    const confirmed = await logoutCurrentSession();
+    if (confirmed) showToast('Logged out of Admin Console');
+    if (!useAuthStore.getState().isAuthenticated) router.push('/admin/login');
   };
 
-  const adminName = user?.name || 'Kailash Malhotra';
-  const adminBadge = user?.designation || 'Estate Manager';
-  const adminInitials = user?.avatarInitials || 'KM';
+  useEffect(() => {
+    if (!organizationId && availableOrganizations.length > 0) {
+      setOrganizationId(availableOrganizations[0].id);
+    }
+  }, [organizationId, availableOrganizations, setOrganizationId]);
+
+  const isSuperAdmin = roles.includes('SUPER_ADMIN');
+  const adminName = authenticatedAdminName(backendUser);
+  const adminBadge = isSuperAdmin ? 'Super Admin' : 'Estate Manager';
+  const adminInitials =
+    adminName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w: string) => w[0]?.toUpperCase() || '')
+      .join('') || 'SA';
+
+  const societyName = society?.name || availableOrganizations.find(org => org.id === organizationId)?.name || 'Society';
 
   return (
     <header className="admin-topbar">
@@ -91,7 +127,9 @@ export const AdminTopBar: React.FC<AdminTopBarProps> = ({
         <button
           className="sidebar-toggle-btn"
           id="sidebarToggle"
-          aria-label="Toggle Navigation"
+          aria-label={sidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+          aria-expanded={sidebarExpanded}
+          aria-controls="admin-navigation"
           onClick={onToggleSidebar}
         >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -111,7 +149,30 @@ export const AdminTopBar: React.FC<AdminTopBarProps> = ({
       </div>
 
       <div className="topbar-right" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        {/* Actions & Status */}
+        {/* Highlighted Society Name Pill */}
+        <div
+          className="society-highlight-pill"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '5px 14px',
+            background: 'linear-gradient(135deg, #0a2540 0%, #0f4c81 60%, #0284c7 100%)',
+            color: '#ffffff',
+            borderRadius: 'var(--radius-full)',
+            fontWeight: 700,
+            fontSize: '0.8125rem',
+            boxShadow: '0 2px 8px rgba(2, 132, 199, 0.25)',
+            border: '1px solid rgba(255, 255, 255, 0.22)',
+            letterSpacing: '-0.01em',
+          }}
+          title={`Active Society: ${societyName}`}
+        >
+          <span style={{ fontSize: '0.9rem' }}>🏢</span>
+          <span>{societyName}</span>
+        </div>
+
+        {/* Live System Status */}
         <div className="society-status-badge">
           <span className="live-indicator-dot"></span>
           <span>System Live</span>

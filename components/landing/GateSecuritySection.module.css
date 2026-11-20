@@ -1,0 +1,365 @@
+/* ── Interactive Gate & Security Section CSS ─────────────────────── */
+
+.securitySection {
+  padding: 96px 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.container {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.layoutGrid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 52px;
+  align-items: center;
+}
+
+/* ── Left Gate Simulation Area ── */
+.interactiveStageWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.stage {
+  position: relative;
+  background: #f1f5f9;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 20px 48px -12px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.06);
+  aspect-ratio: 560 / 440;
+}
+
+.map {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.gateArm {
+  transform-origin: 242px 303px;
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.gateOpen {
+  transform: rotate(-76deg);
+}
+
+.carGroup {
+  transition: transform 1.2s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.5s ease;
+}
+
+.carPass {
+  transform: translateY(-260px);
+}
+
+.carBack {
+  transform: translateY(80px);
+  opacity: 0.35;
+}
+
+.anprBadge {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.anprPulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.35);
+  animation: pulseDot 1.8s ease-in-out infinite;
+}
+
+@keyframes pulseDot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.7;
+  }
+}
+
+/* Decision prompt & Gate Log grid */
+.decisionGrid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 16px;
+}
+
+.visitorCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.06);
+}
+
+.visitorHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.visitorAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.visitorName {
+  font-size: 15px;
+  font-weight: 750;
+  color: #0f172a;
+  margin: 0 0 2px;
+}
+
+.visitorSub {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.btnRow {
+  display: flex;
+  gap: 10px;
+}
+
+.actionBtn {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.btnAllow {
+  background: #035F4F;
+  color: #ffffff;
+}
+
+.btnAllow:hover:not(:disabled) {
+  background: #02473b;
+  transform: translateY(-1px);
+}
+
+.btnDeny {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.btnDeny:hover:not(:disabled) {
+  background: #fecaca;
+}
+
+.actionBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.gateLogCard {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.logTitle {
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 10px;
+}
+
+.logList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.logRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #334155;
+}
+
+.logDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dotAllow {
+  background: #10b981;
+}
+
+.dotDeny {
+  background: #ef4444;
+}
+
+.logName {
+  flex: 1;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logTime {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+/* ── Right Column Copy ── */
+.copySide {
+  display: flex;
+  flex-direction: column;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  width: fit-content;
+  border: 1px solid #cce8e2;
+}
+
+.title {
+  font-size: clamp(30px, 3.8vw, 44px);
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin: 0 0 16px;
+}
+
+.greenAccent {
+  color: #035F4F;
+}
+
+.desc {
+  font-size: 16px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0 0 32px;
+}
+
+.pillarsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.pillarItem {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.pillarIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.pillarTitle {
+  font-size: 14.5px;
+  font-weight: 750;
+  color: #0f172a;
+  margin: 0 0 4px;
+}
+
+.pillarDesc {
+  font-size: 12.5px;
+  color: #64748b;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.ctaContainer {
+  margin-top: 8px;
+}
+
+.guardCtaBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 10px;
+  background: #035F4F;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.guardCtaBtn:hover {
+  background: #02473b;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -4px rgba(3, 95, 79, 0.3);
+}
+
+@media (max-width: 1024px) {
+  .layoutGrid {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+}
+
+@media (max-width: 640px) {
+  .pillarsGrid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .decisionGrid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -2,110 +2,46 @@
 
 import React from 'react';
 
-// Green Skyline + Leaf Icon for Resident App & Admin Portal
+// Official App Icon for Resident App & Resident Portal
 export const LogoResidentAdmin: React.FC<{ size?: number; className?: string }> = ({
   size = 72,
   className
 }) => (
-  <svg
+  <img
+    src="/assets/SocietyOsResidentIcon.png"
+    alt="SocietyOS Resident"
     width={size}
     height={size}
-    viewBox="0 0 84 84"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
     className={className}
-  >
-    {/* Left Building with Angled Cut Top */}
-    <path
-      d="M26 33.5L37 25.5V64H26V33.5Z"
-      stroke="#1B4D3E"
-      strokeWidth="3.2"
-      strokeLinejoin="round"
-      fill="none"
-    />
-    <line x1="31.5" y1="36" x2="31.5" y2="40" stroke="#1B4D3E" strokeWidth="2.5" strokeLinecap="round" />
-    <line x1="31.5" y1="46" x2="31.5" y2="50" stroke="#1B4D3E" strokeWidth="2.5" strokeLinecap="round" />
-    <line x1="31.5" y1="56" x2="31.5" y2="60" stroke="#1B4D3E" strokeWidth="2.5" strokeLinecap="round" />
-
-    {/* Center Tall Building with Pointed Top */}
-    <path
-      d="M37 20L48 14V64H37V20Z"
-      stroke="#2E7D5B"
-      strokeWidth="3.2"
-      strokeLinejoin="round"
-      fill="none"
-    />
-    <line x1="42.5" y1="26" x2="42.5" y2="30" stroke="#2E7D5B" strokeWidth="2.5" strokeLinecap="round" />
-    <line x1="42.5" y1="36" x2="42.5" y2="40" stroke="#2E7D5B" strokeWidth="2.5" strokeLinecap="round" />
-    <line x1="42.5" y1="46" x2="42.5" y2="50" stroke="#2E7D5B" strokeWidth="2.5" strokeLinecap="round" />
-    <line x1="42.5" y1="56" x2="42.5" y2="60" stroke="#2E7D5B" strokeWidth="2.5" strokeLinecap="round" />
-
-    {/* Right Lower Building */}
-    <path
-      d="M48 37H58V64H48V37Z"
-      stroke="#1B4D3E"
-      strokeWidth="3.2"
-      strokeLinejoin="round"
-      fill="none"
-    />
-
-    {/* Elegant Two-tone Green Leaf on Right */}
-    <path
-      d="M49 61C53 49 66 50 69 50C69 53 68 64 56 64C52 64 49 61 49 61Z"
-      fill="#52B788"
-    />
-    <path
-      d="M50 60C56 56 61 54 66 52"
-      stroke="#FFFFFF"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-    />
-    <path
-      d="M56 62C59 55 66 56 68 56C68 58 67 63 60 63C57 63 56 62 56 62Z"
-      fill="#2E7D5B"
-    />
-
-    {/* Base Line */}
-    <line x1="20" y1="64" x2="68" y2="64" stroke="#1B4D3E" strokeWidth="3.2" strokeLinecap="round" />
-  </svg>
+    style={{
+      width: `${size}px`,
+      height: `${size}px`,
+      objectFit: 'contain',
+      display: 'inline-block',
+      borderRadius: '22%'
+    }}
+  />
 );
 
-// Blue Shield with Guard Officer Avatar for Guard App
+// Official App Icon for Guard App & Gate Terminal
 export const LogoGuardShield: React.FC<{ size?: number; className?: string }> = ({
   size = 72,
   className
 }) => (
-  <svg
+  <img
+    src="/assets/SocietyOsGuardIcon.png"
+    alt="SocietyOS Guard"
     width={size}
     height={size}
-    viewBox="0 0 84 84"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
     className={className}
-  >
-    {/* Blue Shield */}
-    <path
-      d="M42 12L66 22V42C66 57 56 69 42 74C28 69 18 57 18 42V22L42 12Z"
-      fill="#0284C7"
-    />
-
-    {/* Officer Cap */}
-    <ellipse cx="42" cy="30" rx="13" ry="4" fill="#FFFFFF" />
-    <path d="M31 30C31 24.5 36 22 42 22C48 22 53 24.5 53 30H31Z" fill="#FFFFFF" />
-    <circle cx="42" cy="26" r="2" fill="#0284C7" />
-
-    {/* Officer Face */}
-    <path d="M35 31C35 31 35 41 42 41C49 41 49 31 49 31H35Z" fill="#FFFFFF" />
-
-    {/* Officer Torso / Collar / Shoulders */}
-    <path
-      d="M26 56C26 47 33 44 38 43L42 49L46 43C51 44 58 47 58 56H26Z"
-      fill="#FFFFFF"
-    />
-
-    {/* Officer Tie */}
-    <polygon points="42,47 39.5,53 42,58 44.5,53" fill="#0284C7" />
-  </svg>
+    style={{
+      width: `${size}px`,
+      height: `${size}px`,
+      objectFit: 'contain',
+      display: 'inline-block',
+      borderRadius: '22%'
+    }}
+  />
 );
 
 // UI Icons

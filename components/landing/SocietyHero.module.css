@@ -1,0 +1,430 @@
+/* ── Global Landing Page Layout & Hero Section Styles ─────────────── */
+
+.pageWrapper {
+  min-height: 100vh;
+  background: #fdfdfd;
+  color: #0f172a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ── Top Navigation Bar ── */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 32px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: #035F4F;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 850;
+  font-size: 19px;
+  box-shadow: 0 4px 12px rgba(3, 95, 79, 0.25);
+}
+
+.brandName {
+  font-size: 20px;
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.navLinks {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.navLink {
+  color: #475569;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  transition: color 0.15s ease;
+}
+
+.navLink:hover {
+  color: #035F4F;
+}
+
+.navActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.weatherPill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #334155;
+}
+
+.signIn {
+  color: #334155;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 12px;
+}
+
+.signIn:hover {
+  color: #035F4F;
+}
+
+.btnSolid {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #035F4F;
+  color: #ffffff;
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.btnSolid:hover {
+  background: #02473b;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -2px rgba(3, 95, 79, 0.3);
+}
+
+/* ── Hero Container ── */
+.heroContainer {
+  padding: 60px 32px 48px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: 1.05fr 1.2fr;
+  gap: 52px;
+  align-items: center;
+  margin-bottom: 56px;
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+}
+
+.heroBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12px;
+  font-weight: 750;
+  margin-bottom: 18px;
+  width: fit-content;
+  border: 1px solid #cce8e2;
+}
+
+.heroHeadline {
+  font-size: clamp(34px, 4.4vw, 54px);
+  font-weight: 850;
+  color: #0f172a;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  margin: 0 0 18px;
+}
+
+.heroHighlight {
+  color: #035F4F;
+}
+
+.heroLede {
+  font-size: 16.5px;
+  color: #475569;
+  line-height: 1.6;
+  max-width: 44ch;
+  margin: 0 0 28px;
+}
+
+.heroCtaRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.heroCtaPrimary {
+  padding: 13px 26px;
+  border-radius: 12px;
+  background: #035F4F;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 750;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  box-shadow: 0 8px 24px -4px rgba(3, 95, 79, 0.35);
+}
+
+.heroCtaPrimary:hover {
+  background: #02473b;
+  transform: translateY(-2px);
+}
+
+.heroCtaSecondary {
+  padding: 13px 22px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  border: 1px solid #e2e8f0;
+}
+
+.heroCtaSecondary:hover {
+  background: #e2e8f0;
+}
+
+.heroCheckmarks {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+/* ── Hero Visual Card & Telemetry Chips ── */
+.heroVisualWrapper {
+  position: relative;
+}
+
+.heroVisualCard {
+  position: relative;
+  background: #ffffff;
+  border-radius: 28px;
+  border: 1px solid #e2e8f0;
+  padding: 12px;
+  box-shadow: 0 25px 60px -15px rgba(3, 95, 79, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+.heroImageContainer {
+  position: relative;
+  border-radius: 20px;
+  overflow: hidden;
+  aspect-ratio: 680 / 440;
+}
+
+.heroVisualImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Floating chips positioned over image */
+.floatingChip1, .floatingChip2, .floatingChip3, .floatingChip4 {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 8px 14px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 12px 28px -6px rgba(15, 23, 42, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  animation: floatChip 4s ease-in-out infinite alternate;
+}
+
+.floatingChip1 {
+  top: 8%;
+  left: 6%;
+}
+
+.floatingChip2 {
+  top: 14%;
+  right: 6%;
+  animation-delay: 1.2s;
+}
+
+.floatingChip3 {
+  bottom: 22%;
+  left: 8%;
+  animation-delay: 2.2s;
+}
+
+.floatingChip4 {
+  bottom: 12%;
+  right: 8%;
+  animation-delay: 0.7s;
+}
+
+@keyframes floatChip {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-5px);
+  }
+}
+
+.chipIconGreen {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #035F4F;
+  font-size: 15px;
+}
+
+.chipIconTeal {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #ccfbf1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0f766e;
+  font-size: 15px;
+}
+
+.chipIconEmerald {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #dcfce7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #15803d;
+  font-size: 15px;
+}
+
+.chipIconOrange {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #ffedd5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c2410c;
+  font-size: 15px;
+}
+
+.chipLabel {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.chipVal {
+  font-size: 12.5px;
+  font-weight: 750;
+  color: #0f172a;
+}
+
+/* ── Metrics Counter Bar ── */
+.metricsBar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  padding: 24px 32px;
+  background: #ffffff;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
+}
+
+.metricItem {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.metricIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.metricNumber {
+  font-size: 22px;
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.metricLabel {
+  font-size: 12.5px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+@media (max-width: 1024px) {
+  .heroGrid {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .metricsBar {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  .navLinks {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .metricsBar {
+    grid-template-columns: 1fr;
+  }
+  .floatingChip1, .floatingChip2, .floatingChip3, .floatingChip4 {
+    position: static;
+    margin: 8px 0;
+  }
+}

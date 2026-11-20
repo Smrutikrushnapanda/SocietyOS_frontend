@@ -12,34 +12,79 @@ import {
   IconCheck,
   IconCalendar,
   IconCar,
-  IconQrCode
+  IconMaximize,
+  IconMinimize,
+  IconDoor
 } from '../common/Icons';
+import { GuardMobileSelect } from './GuardMobileSelect';
+import { useGuestPassScanner } from '../../hooks/useGuestPassScanner';
+import { usePassClock } from '../../hooks/usePassClock';
+import { filterValidGuestPasses } from '../../lib/guard-passes';
 
 interface GuardScannerScreenProps {
   onBack: () => void;
-  onConfirmEntry: (passCode: string, vehicleNo: string, gateName: string) => void;
+  onConfirmEntry: (visitId: string, token: string, vehicleNo: string, gateName: string) => Promise<void>;
 }
 
 export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
   onBack,
   onConfirmEntry
 }) => {
-  const { preApprovedPasses, getPassByCodeOrName } = useVisitorStore();
+  const { preApprovedPasses } = useVisitorStore();
   const { showToast } = useToastStore();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const cameraContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedPass, setSelectedPass] = useState<PreApprovedPass | null>(null);
   const [manualCode, setManualCode] = useState('');
+  const [isConfirming, setIsConfirming] = useState(false);
+  const confirming = useRef(false);
   const [vehicleNo, setVehicleNo] = useState('');
-  const [gateName, setGateName] = useState('Gate 01 • North Booth');
+  const [gateName, setGateName] = useState('Main Gate Terminal');
 
   // Camera state
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [torchOn, setTorchOn] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    if (!isFullScreen) {
+      if (cameraContainerRef.current?.requestFullscreen) {
+        try {
+          await cameraContainerRef.current.requestFullscreen();
+        } catch {
+          // fallback to CSS fullscreen
+        }
+      }
+      setIsFullScreen(true);
+    } else {
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {
+          // ignore error
+        }
+      }
+      setIsFullScreen(false);
+    }
+  };
 
   // Initialize WebRTC Camera Stream
   useEffect(() => {
@@ -100,11 +145,16 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
 
   // Flip Camera
   const toggleCameraFacing = () => {
+    setTorchOn(false);
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // Toggle Torch if available
+  // Toggle Torch (rear LED or front white-screen illumination)
   const toggleTorch = async () => {
+    if (facingMode === 'user') {
+      setTorchOn((prev) => !prev);
+      return;
+    }
     if (!mediaStreamRef.current) return;
     const track = mediaStreamRef.current.getVideoTracks()[0];
     if (track) {
@@ -125,6 +175,21 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
     }
   };
 
+  const passNow = usePassClock([
+    ...preApprovedPasses.flatMap(pass => [pass.startDate, pass.endDate]),
+    selectedPass?.startDate,
+    selectedPass?.endDate,
+  ]);
+  const validPreApprovedPasses = filterValidGuestPasses(preApprovedPasses, new Date(passNow));
+  const selectedPassExpired = !!selectedPass && Date.parse(selectedPass.endDate) <= passNow;
+
+  useEffect(() => {
+    if (selectedPassExpired && !isConfirming) {
+      setSelectedPass(null);
+      showToast('Guest pass has expired', 'error');
+    }
+  }, [selectedPassExpired, isConfirming, showToast]);
+
   const handleSelectPass = (pass: PreApprovedPass) => {
     // Stop camera
     if (mediaStreamRef.current) {
@@ -137,22 +202,23 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
     showToast(`QR FastPass Matched: #${pass.passCode} for Flat ${pass.flat}!`);
   };
 
-  const handleManualLookup = () => {
-    if (!manualCode.trim()) {
-      alert('Please enter a Pass Code or QR Token');
-      return;
-    }
-    const found = getPassByCodeOrName(manualCode) || preApprovedPasses[0];
-    if (found) {
-      handleSelectPass(found);
-    } else {
-      showToast('No matching pre-approved pass found. Please verify details.');
-    }
-  };
+  const { verifyToken, scanImage, isVerifying } = useGuestPassScanner(videoRef, cameraActive && !selectedPass, handleSelectPass);
 
-  const handleConfirm = () => {
-    if (!selectedPass) return;
-    onConfirmEntry(selectedPass.passCode || selectedPass.id, vehicleNo, gateName);
+  const handleManualLookup = () => { void verifyToken(manualCode); };
+
+  const handleConfirm = async () => {
+    if (!selectedPass?.visitId || !selectedPass.qrToken || selectedPassExpired || confirming.current) return;
+    confirming.current = true;
+    setIsConfirming(true);
+    try {
+      await onConfirmEntry(selectedPass.visitId, selectedPass.qrToken, vehicleNo, gateName);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Guest entry failed', 'error');
+      setSelectedPass(null);
+    } finally {
+      confirming.current = false;
+      setIsConfirming(false);
+    }
   };
 
   const handleBack = () => {
@@ -213,7 +279,7 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
               gap: '6px'
             }}
           >
-            <IconCamera size={16} />
+            
             <span>FastPass Scanner</span>
           </h2>
           <div style={{ fontSize: '0.6875rem', color: 'var(--neutral)', margin: 0 }}>
@@ -252,19 +318,23 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
           <>
             {/* Camera Video / Optical Viewport */}
             <div
+              ref={cameraContainerRef}
+              className={facingMode === 'user' && torchOn ? 'guard-scanner-viewfinder-flash' : undefined}
               style={{
-                position: 'relative',
-                width: '100%',
-                height: '260px',
-                backgroundColor: '#091512',
-                borderRadius: 'var(--radius-lg)',
+                position: isFullScreen ? 'fixed' : 'relative',
+                inset: isFullScreen ? 0 : undefined,
+                width: isFullScreen ? '100vw' : '100%',
+                height: isFullScreen ? '100vh' : '260px',
+                zIndex: isFullScreen ? 99999 : undefined,
+                backgroundColor: facingMode === 'user' && torchOn ? '#ffffff' : '#091512',
+                borderRadius: isFullScreen ? 0 : 'var(--radius-lg)',
                 overflow: 'hidden',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                marginBottom: '16px',
-                border: '2px solid var(--pine)',
-                boxShadow: 'var(--shadow-md)'
+                marginBottom: isFullScreen ? 0 : '16px',
+                border: isFullScreen ? 'none' : '2px solid var(--pine)',
+                boxShadow: isFullScreen ? 'none' : 'var(--shadow-md)'
               }}
             >
               {/* Live WebRTC Camera Feed */}
@@ -368,7 +438,7 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                   right: '10px',
                   display: 'flex',
                   gap: '6px',
-                  zIndex: 5
+                  zIndex: 10
                 }}
               >
                 <button
@@ -390,6 +460,27 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                 >
                   <IconFlip size={14} />
                   <span>Flip</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  style={{
+                    background: isFullScreen ? 'var(--pine)' : 'rgba(0,0,0,0.65)',
+                    border: '1px solid rgba(255,255,255,0.3)',
+                    color: '#fff',
+                    borderRadius: '6px',
+                    padding: '5px 10px',
+                    fontSize: '0.7rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title={isFullScreen ? 'Close Full Screen' : 'Full Screen'}
+                  aria-label={isFullScreen ? 'Close Full Screen' : 'Full Screen'}
+                >
+                  {isFullScreen ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
+                  <span>{isFullScreen ? 'Exit Full' : 'Full Screen'}</span>
                 </button>
                 <button
                   type="button"
@@ -428,7 +519,7 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
               )}
             </div>
 
-            {/* Quick Simulate Pre-Approved Passes */}
+            {/* Quick Pre-Approved Passes */}
             <div style={{ marginBottom: '16px' }}>
               <span
                 style={{
@@ -440,44 +531,67 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                   marginBottom: '8px'
                 }}
               >
-                Simulate Target Pre-Approved Guest QR:
+                Pre-Approved Guest Passes:
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {preApprovedPasses.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="card"
-                    style={{
-                      padding: '10px 12px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.8125rem',
-                      textAlign: 'left',
-                      width: '100%',
-                      borderRadius: 'var(--radius-md)',
-                      background: 'var(--surface)',
-                      cursor: 'pointer'
-                    }}
-                    onClick={() => handleSelectPass(p)}
-                  >
-                    <div>
-                      <strong style={{ color: 'var(--pine-dark)', display: 'block' }}>{p.guestName}</strong>
-                      <span style={{ color: 'var(--neutral)', fontSize: '0.75rem' }}>
-                        Flat {p.flat} ({p.purpose}) • {p.validityDisplay || 'Valid Today'}
-                      </span>
-                    </div>
-                    <span className="badge badge-success" style={{ fontSize: '0.6875rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                      <IconQrCode size={12} />
-                      <span>Pass {p.passCode}</span>
-                    </span>
-                  </button>
-                ))}
+                {validPreApprovedPasses.length === 0 ? (
+                  <div className="card" style={{ padding: '16px', background: 'var(--surface)', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--pine-dark)' }}>No Pre-Approved Passes Available</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--neutral)', marginTop: '4px' }}>Residents have not issued any active passes in this organization.</div>
+                  </div>
+                ) : (
+                  validPreApprovedPasses.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="card"
+                      style={{
+                        padding: '12px 14px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.875rem',
+                        textAlign: 'left',
+                        width: '100%',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--surface)',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => { void verifyToken(p.qrToken || p.id); }}
+                    >
+                      <strong style={{ color: 'var(--pine-dark)', fontWeight: 600 }}>{p.guestName}</strong>
+                      <span style={{ color: 'var(--neutral)', fontSize: '1rem', lineHeight: 1 }} aria-hidden="true">›</span>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
 
+            <button
+              type="button"
+              className="guard-qr-image-upload"
+              disabled={isVerifying}
+              aria-busy={isVerifying}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <span className="guard-qr-image-upload-icon" aria-hidden="true"><IconCamera size={22} /></span>
+              <span className="guard-qr-image-upload-copy">
+                <strong>{isVerifying ? 'Verifying guest pass…' : 'Scan QR from image'}</strong>
+                <span>Choose a guest pass from your gallery</span>
+              </span>
+              <span className="guard-qr-image-upload-arrow" aria-hidden="true">›</span>
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              disabled={isVerifying}
+              aria-label="Scan QR from image"
+              onChange={event => { void scanImage(event.target.files?.[0]); event.target.value = ''; }}
+            />
+            {isVerifying && <p role="status">Verifying guest pass…</p>}
             {/* Manual Passcode Lookup */}
             <div className="card" style={{ padding: '12px', background: 'var(--surface)' }}>
               <span className="form-label" style={{ marginBottom: '6px' }}>
@@ -487,7 +601,7 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                 <input
                   className="input"
                   id="guard-manual-pass-input"
-                  placeholder="e.g. GP-9481"
+                  placeholder="Enter full pass code or QR token"
                   value={manualCode}
                   onChange={(e) => setManualCode(e.target.value)}
                   style={{ fontSize: '0.875rem', textTransform: 'uppercase' }}
@@ -496,6 +610,7 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                   type="button"
                   className="btn btn-primary"
                   style={{ padding: '0 16px', fontSize: '0.8125rem', whiteSpace: 'nowrap' }}
+                  disabled={isVerifying}
                   onClick={handleManualLookup}
                 >
                   Verify Pass
@@ -617,17 +732,20 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                 <label className="form-label" style={{ fontSize: '0.8125rem' }}>
                   Entry Gate Terminal
                 </label>
-                <select
-                  className="select"
+                <GuardMobileSelect
                   id="guard-scanned-gate"
-                  style={{ fontSize: '0.875rem' }}
+                  sheetTitle="Select Entry Gate"
+                  placeholder="Select Entry Gate"
                   value={gateName}
-                  onChange={(e) => setGateName(e.target.value)}
-                >
-                  <option value="Gate 01 • North Booth">Gate 01 • North Booth (Main Gate)</option>
-                  <option value="Gate 02 • Back Gate">Gate 02 • Back Gate</option>
-                  <option value="Service & Delivery Gate #3">Service & Delivery Gate #3</option>
-                </select>
+                  leadingIcon={<IconDoor size={15} />}
+                  options={[
+                    { value: 'Main Gate Terminal', label: 'Main Gate Terminal', icon: <IconDoor size={16} /> },
+                    { value: 'North Booth', label: 'North Booth', icon: <IconDoor size={16} /> },
+                    { value: 'Back Gate', label: 'Back Gate', icon: <IconDoor size={16} /> },
+                    { value: 'Service & Delivery Gate', label: 'Service & Delivery Gate', icon: <IconDoor size={16} /> },
+                  ]}
+                  onChange={(val) => setGateName(val)}
+                />
               </div>
             </div>
 
@@ -636,7 +754,8 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                 type="button"
                 className="btn btn-ghost"
                 style={{ flex: 1, padding: '12px', fontSize: '0.8125rem' }}
-                onClick={() => setSelectedPass(null)}
+                disabled={isConfirming}
+                  onClick={() => setSelectedPass(null)}
               >
                 Scan Another
               </button>
@@ -652,10 +771,11 @@ export const GuardScannerScreen: React.FC<GuardScannerScreenProps> = ({
                   justifyContent: 'center',
                   gap: '8px'
                 }}
-                onClick={handleConfirm}
+                disabled={isConfirming || selectedPassExpired}
+                  onClick={handleConfirm}
               >
                 <IconCheck size={18} />
-                <span>Confirm &amp; Open Barrier</span>
+                <span>{isConfirming ? 'Logging entry…' : 'Confirm entry'}</span>
               </button>
             </div>
           </>

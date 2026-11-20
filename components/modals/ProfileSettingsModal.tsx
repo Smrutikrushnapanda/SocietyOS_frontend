@@ -1,27 +1,58 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useResidentStore, useSocietyStore, useModalStore, useToastStore, useAuthStore } from '../../store';
-import { Switch } from '../common/Switch';
+import { NotificationPreferenceForm } from './NotificationPreferenceFields';
+import { notificationPreferencesScope, useNotificationPreferencesStore } from '../../store/useNotificationPreferencesStore';
 import { useRouter } from 'next/navigation';
 
 
-export const ProfileSettingsModal: React.FC = () => {
-  const { resident, toggleNotification } = useResidentStore();
+import { logoutCurrentSession } from '../../lib/auth/logout-session';
+
+export const ProfileSettingsModal: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const { resident } = useResidentStore();
   const { society } = useSocietyStore();
   const { closeModal } = useModalStore();
   const { showToast } = useToastStore();
-  const { logout } = useAuthStore();
+  
   const router = useRouter();
-
-  const handleLogout = () => {
+  const preferences = useNotificationPreferencesStore();
+  const userId = useAuthStore((state) => state.backendUser?.id ?? state.user?.id);
+  const organizationId = useAuthStore((state) => state.organizationId);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const { acquire } = preferences;
+  useEffect(() => acquire(), [acquire, userId, organizationId, isAuthenticated]);
+  const current = preferences.scope === notificationPreferencesScope();
+  const dirty = current && preferences.draft?.some((item) =>
+    preferences.saved?.find((saved) => saved.category === item.category)?.enabled !== item.enabled);
+  const handleClose = () => {
+    if (preferences.saving) return;
+    preferences.close();
     closeModal();
-    logout();
-    showToast('Logged out successfully');
-    router.push('/resident/login');
+  };
+  const handleSave = async () => {
+    if (await preferences.save()) {
+      showToast('Notification preferences saved.');
+      preferences.close();
+      closeModal();
+    }
   };
 
-  const handleToggle = (key: keyof typeof resident.whatsappNotifications) => {
-    toggleNotification(key);
-    showToast('Preference saved.');
+  const avatarInitials = resident?.avatarInitials || 'RES';
+  const displayName = resident?.name || 'Resident';
+  const flatDisplay = resident?.flat && resident.flat !== 'No flat'
+    ? `Flat ${resident.flat}`
+    : 'No flat assigned';
+  const societyBuildingDisplay = [
+    society?.name || null,
+    resident?.buildingName && resident.buildingName !== '—' ? resident.buildingName : null,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+
+  const handleLogout = async () => {
+    handleClose();
+    const confirmed = await logoutCurrentSession();
+    if (confirmed) showToast('Logged out successfully');
+    if (!useAuthStore.getState().isAuthenticated) router.push('/resident/login');
   };
 
   return (
@@ -29,7 +60,7 @@ export const ProfileSettingsModal: React.FC = () => {
       className="mobile-modal-overlay"
       id="profile-modal"
       onClick={(e) => {
-        if (e.target === e.currentTarget) closeModal();
+        if (e.target === e.currentTarget) handleClose();
       }}
     >
       <div className="mobile-bottom-sheet">
@@ -40,112 +71,24 @@ export const ProfileSettingsModal: React.FC = () => {
             className="resident-avatar"
             style={{ width: '44px', height: '44px', fontSize: '1.1rem' }}
           >
-            {resident.avatarInitials}
+            {avatarInitials}
           </div>
           <div>
-            <h3 style={{ fontSize: '1.1rem' }}>{resident.name}</h3>
+            <h3 style={{ fontSize: '1.1rem' }}>{displayName}</h3>
             <p style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>
-              Flat {resident.flat} • {society.name} ({resident.buildingName})
+              {flatDisplay} {societyBuildingDisplay ? `• ${societyBuildingDisplay}` : ''}
             </p>
           </div>
         </div>
 
-        <h4 style={{ fontSize: '0.875rem', marginBottom: '8px', color: 'var(--pine)' }}>
-          WhatsApp Notification Channels
-        </h4>
+        {children}
 
-        <div
-          className="card"
-          style={{
-            padding: '8px 12px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '10px',
-            marginBottom: '16px'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <strong style={{ fontSize: '0.8125rem' }}>Visitor Approvals</strong>
-              <p style={{ fontSize: '0.6875rem', color: 'var(--neutral)' }}>
-                Instant gate approval prompt
-              </p>
-            </div>
-            <Switch
-              checked={resident.whatsappNotifications.visitorApprovals}
-              onChange={() => handleToggle('visitorApprovals')}
-            />
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              borderTop: '1px solid var(--border-subtle)',
-              paddingTop: '8px'
-            }}
-          >
-            <div>
-              <strong style={{ fontSize: '0.8125rem' }}>Maintenance Invoices</strong>
-              <p style={{ fontSize: '0.6875rem', color: 'var(--neutral)' }}>
-                Monthly bills & receipts
-              </p>
-            </div>
-            <Switch
-              checked={resident.whatsappNotifications.paymentReminders}
-              onChange={() => handleToggle('paymentReminders')}
-            />
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              borderTop: '1px solid var(--border-subtle)',
-              paddingTop: '8px'
-            }}
-          >
-            <div>
-              <strong style={{ fontSize: '0.8125rem' }}>Notice Circulars</strong>
-              <p style={{ fontSize: '0.6875rem', color: 'var(--neutral)' }}>
-                Urgent society broadcasts
-              </p>
-            </div>
-            <Switch
-              checked={resident.whatsappNotifications.noticeBroadcasts}
-              onChange={() => handleToggle('noticeBroadcasts')}
-            />
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              borderTop: '1px solid var(--border-subtle)',
-              paddingTop: '8px'
-            }}
-          >
-            <div>
-              <strong style={{ fontSize: '0.8125rem' }}>Helpdesk Updates</strong>
-              <p style={{ fontSize: '0.6875rem', color: 'var(--neutral)' }}>
-                Technician assignment & status
-              </p>
-            </div>
-            <Switch
-              checked={resident.whatsappNotifications.complaintUpdates}
-              onChange={() => handleToggle('complaintUpdates')}
-            />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={closeModal}>
-            Save
-          </button>
+        <NotificationPreferenceForm draft={current ? preferences.draft : null}
+          loading={!current || preferences.loading} saving={preferences.saving}
+          error={current ? preferences.error : null} dirty={!!dirty} onToggle={preferences.toggle}
+          onRetry={() => void preferences.load()} onSave={() => void handleSave()} onCancel={handleClose}>
           <button
+            disabled={preferences.saving}
             type="button"
             className="btn btn-danger"
             style={{ padding: '8px 14px' }}
@@ -154,7 +97,7 @@ export const ProfileSettingsModal: React.FC = () => {
           >
             Log Out
           </button>
-        </div>
+        </NotificationPreferenceForm>
       </div>
     </div>
   );

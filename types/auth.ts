@@ -1,3 +1,6 @@
+export type { BackendRole, OrganizationMembership, AuthMeResponse } from '../lib/api/types';
+
+// Legacy UI portal presentation role (non-authoritative)
 export type UserRole = 'admin' | 'resident' | 'guard';
 
 export interface AuthUser {

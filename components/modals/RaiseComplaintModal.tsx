@@ -1,9 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import clsx from 'clsx';
-import { useComplaintStore, useModalStore, useToastStore, useResidentStore } from '../../store';
+import { useComplaintStore, useModalStore, useToastStore, useAuthStore } from '../../store';
 import { ComplaintPriority } from '../../types';
+import { getPriorityConfigs, PriorityConfig } from '../../lib/api/complaints.api';
+import { getUserFriendlyErrorMessage } from '../../lib/api/errors';
+import { RESIDENT_COMPLAINT_CREATED } from '../../lib/resident-refresh';
 import {
   IconWrench,
   IconLightning,
@@ -12,7 +15,8 @@ import {
   IconCar,
   IconPool,
   IconClose,
-  IconSend
+  IconSend,
+  IconSparkles,
 } from '../common/Icons';
 
 const categories = [
@@ -21,40 +25,96 @@ const categories = [
   { id: 'Lift/Elevator', icon: IconBuilding, label: 'Elevator', sub: 'OTIS AMC' },
   { id: 'Security', icon: IconShield, label: 'Security', sub: 'Gate / Intercom' },
   { id: 'Parking', icon: IconCar, label: 'Parking', sub: 'Slot / EV Bay' },
-  { id: 'Common Area', icon: IconPool, label: 'Common Area', sub: 'Gym / Garden' }
+  { id: 'Common Area', icon: IconPool, label: 'Common Area', sub: 'Gym / Garden' },
+  { id: 'Other', icon: IconSparkles, label: 'Other', sub: 'Custom Issue' },
 ];
 
 export const RaiseComplaintModal: React.FC = () => {
-  const { addComplaint } = useComplaintStore();
-  const { resident } = useResidentStore();
+  const { createResidentComplaint } = useComplaintStore();
+  const { organizationId } = useAuthStore();
   const { closeModal } = useModalStore();
   const { showToast } = useToastStore();
 
   const [category, setCategory] = useState('Plumbing');
+  const [customCategory, setCustomCategory] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState<ComplaintPriority>('medium');
+  const [priority, setPriority] = useState<ComplaintPriority>('MEDIUM');
+  const [prioritiesList, setPrioritiesList] = useState<PriorityConfig[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const errorRef = useRef<HTMLParagraphElement>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (error) { errorRef.current?.focus({ preventScroll: true }); errorRef.current?.scrollIntoView({ block: 'nearest' }); }
+  }, [error]);
+
+  useEffect(() => {
+    let active = true;
+    if (organizationId) {
+      getPriorityConfigs()
+        .then((data) => {
+          if (!active) return;
+          const allowed = data.filter(item => item.status === 'Active' && ['LOW', 'MEDIUM', 'HIGH'].includes(item.priority));
+          setPrioritiesList(allowed);
+          setPriority(current => allowed.length && !allowed.some(item => item.priority === current) ? allowed[0].priority as ComplaintPriority : current);
+        })
+        .catch(() => {});
+    }
+    return () => { active = false; };
+  }, [organizationId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inFlight.current) return;
     if (!title.trim()) {
-      alert('Please enter a short title or summary for the issue.');
+      setError('Please enter a short title or summary for the issue.');
       return;
     }
 
-    const newTicket = addComplaint({
-      title: title.trim(),
-      category,
-      description: description.trim(),
-      priority,
-      flat: resident.flat,
-      raisedBy: resident.name
-    });
+    if (category === 'Other' && !customCategory.trim()) {
+      setError('Please specify the custom category name.');
+      return;
+    }
+    if (!description.trim()) { setError('Please describe the problem and its location.'); return; }
 
-    closeModal();
-    showToast(
-      `Ticket #${newTicket.id} raised! Assigned to ${newTicket.assignedStaff}.`
-    );
+    const categoryMap: Record<string, string> = {
+      Plumbing: 'MAINTENANCE',
+      Electrical: 'MAINTENANCE',
+      'Lift/Elevator': 'FACILITY',
+      Security: 'SAFETY',
+      Parking: 'FACILITY',
+      'Common Area': 'AMENITY',
+      Other: 'OTHER',
+    };
+
+    const formattedSubject = category === 'Other' && customCategory.trim()
+      ? `[${customCategory.trim()}] ${title.trim()}`
+      : title.trim();
+
+    if (formattedSubject.length > 200) { setError('Keep the issue summary, including custom category, within 200 characters.'); return; }
+    const scope = useAuthStore.getState();
+    inFlight.current = true;
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      const newTicket = await createResidentComplaint({
+        category: categoryMap[category] || 'OTHER',
+        subject: formattedSubject,
+        description: description.trim(),
+        priority,
+      });
+      if (useAuthStore.getState().organizationId !== scope.organizationId || useAuthStore.getState().backendUser?.id !== scope.backendUser?.id) return;
+      closeModal();
+      window.dispatchEvent(new CustomEvent(RESIDENT_COMPLAINT_CREATED, { detail: { id: newTicket.id, organizationId: scope.organizationId, userId: scope.backendUser?.id } }));
+      showToast(`Ticket #${newTicket.id.slice(0, 8)} submitted successfully.`, 'success');
+    } catch (err: unknown) {
+      setError(getUserFriendlyErrorMessage(err, 'Failed to submit ticket. Please try again.'));
+    } finally {
+      inFlight.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -62,7 +122,7 @@ export const RaiseComplaintModal: React.FC = () => {
       className="mobile-modal-overlay"
       id="complaint-modal"
       onClick={(e) => {
-        if (e.target === e.currentTarget) closeModal();
+        if (e.target === e.currentTarget && !inFlight.current) closeModal();
       }}
     >
       <div className="mobile-bottom-sheet" style={{ maxHeight: '90vh' }}>
@@ -78,11 +138,13 @@ export const RaiseComplaintModal: React.FC = () => {
               <p>Instant AMC dispatch & automated SLA tracking</p>
             </div>
           </div>
-          <button className="drawer-close-btn" onClick={closeModal} aria-label="Close">
+          <button className="drawer-close-btn" onClick={closeModal} disabled={isSubmitting} aria-label="Close">
             <IconClose size={18} />
           </button>
         </div>
 
+        <form className="resident-ticket-form" onSubmit={handleSubmit} noValidate aria-busy={isSubmitting}>
+        <fieldset disabled={isSubmitting} style={{ display: 'contents', border: 0 }}>
         {/* Category Visual Selector */}
         <div style={{ marginBottom: '10px' }}>
           <div className="drawer-section-title">
@@ -117,6 +179,30 @@ export const RaiseComplaintModal: React.FC = () => {
           </div>
         </div>
 
+        {/* Custom Category Input Box when Other is selected */}
+        {category === 'Other' && (
+          <div className="form-field-wrapper" style={{ marginTop: '-4px', marginBottom: '10px' }}>
+            <div className="form-field-label">
+              <span>
+                Specify Custom Category / Issue Type <span className="required-dot">*</span>
+              </span>
+            </div>
+            <div className="input-icon-group">
+              <span className="input-leading-icon">
+                <IconSparkles size={16} />
+              </span>
+              <input
+                className="form-control-luxury"
+                id="complaint-custom-category-input"
+                placeholder="e.g. Pest Control, Solar Panel, Internet Cable"
+                value={customCategory}
+                onChange={(e) => setCustomCategory(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+        )}
+
         {/* Ticket Title */}
         <div className="form-field-wrapper">
           <div className="form-field-label">
@@ -133,8 +219,9 @@ export const RaiseComplaintModal: React.FC = () => {
               id="complaint-title-input"
               placeholder="e.g. Master bathroom tap dripping constantly"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => { setTitle(e.target.value); setError(null); }}
               required
+              maxLength={200}
               autoFocus
             />
           </div>
@@ -143,16 +230,18 @@ export const RaiseComplaintModal: React.FC = () => {
         {/* Description */}
         <div className="form-field-wrapper">
           <div className="form-field-label">
-            <span>Problem Details & Location</span>
+            <span>Problem Details & Location <span className="required-dot">*</span></span>
           </div>
           <textarea
             className="form-control-luxury"
             id="complaint-desc-input"
             rows={2}
+            required
+            maxLength={2000}
             placeholder="Describe the problem, location in flat, or preferred inspection time..."
             style={{ paddingLeft: '12px', resize: 'none', fontSize: '0.8125rem' }}
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => { setDescription(e.target.value); setError(null); }}
           ></textarea>
         </div>
 
@@ -167,56 +256,74 @@ export const RaiseComplaintModal: React.FC = () => {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
+              gridTemplateColumns: `repeat(${prioritiesList.length > 0 ? Math.min(prioritiesList.length, 4) : 3}, 1fr)`,
               gap: '6px'
             }}
           >
-            <button
-              type="button"
-              className={clsx(
-                'priority-pill low',
-                priority === 'low' && 'active'
-              )}
-              onClick={() => setPriority('low')}
-            >
-              Normal (24h)
-            </button>
-            <button
-              type="button"
-              className={clsx(
-                'priority-pill medium',
-                priority === 'medium' && 'active'
-              )}
-              onClick={() => setPriority('medium')}
-            >
-              High (6h)
-            </button>
-            <button
-              type="button"
-              className={clsx(
-                'priority-pill high',
-                priority === 'high' && 'active'
-              )}
-              onClick={() => setPriority('high')}
-            >
-              Emergency (1h)
-            </button>
+            {prioritiesList.length > 0 ? (
+              prioritiesList.map((p) => {
+                const hrs = Math.round(p.response_deadline_minutes / 60);
+                const timeLabel = hrs > 0 ? `${hrs}h` : `${p.response_deadline_minutes}m`;
+                const pillClass = p.priority === 'URGENT' ? 'high' : p.priority === 'HIGH' ? 'medium' : 'low';
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={clsx(
+                      `priority-pill ${pillClass}`,
+                      priority === p.priority && 'active'
+                    )}
+                    onClick={() => setPriority(p.priority as ComplaintPriority)}
+                  >
+                    {p.name.split(' ')[0]} ({timeLabel})
+                  </button>
+                );
+              })
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={clsx('priority-pill low', priority === 'LOW' && 'active')}
+                  onClick={() => setPriority('LOW')}
+                >
+                  Normal (24h)
+                </button>
+                <button
+                  type="button"
+                  className={clsx('priority-pill medium', priority === 'MEDIUM' && 'active')}
+                  onClick={() => setPriority('MEDIUM')}
+                >
+                  High (6h)
+                </button>
+                <button
+                  type="button"
+                  className={clsx('priority-pill high', priority === 'HIGH' && 'active')}
+                  onClick={() => setPriority('HIGH')}
+                >
+                  Emergency (1h)
+                </button>
+              </>
+            )}
           </div>
         </div>
 
+        </fieldset>
+        {error && <p ref={errorRef} role="alert" className="amenity-booking-error" tabIndex={-1}>{error}</p>}
         <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={closeModal}>
+          <button type="button" className="btn btn-ghost" style={{ flex: 1 }} onClick={closeModal} disabled={isSubmitting}>
             Cancel
           </button>
           <button
+            type="submit"
             className="btn btn-primary"
             style={{ flex: 1.5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            onClick={handleSubmit}
+            disabled={isSubmitting}
           >
             <IconSend size={16} />
-            <span>Submit Ticket</span>
+            <span>{isSubmitting ? 'Submitting...' : 'Submit Ticket'}</span>
           </button>
         </div>
+        </form>
       </div>
     </div>
   );

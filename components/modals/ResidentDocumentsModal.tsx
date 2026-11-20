@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useModalStore, useToastStore, useResidentStore } from '../../store';
 import { useDocumentStore } from '../../store/useDocumentStore';
 import { SocietyDocument } from '../../types/document';
+import { triggerFileDownload } from '../../lib/api/files.api';
 import {
   IconClose,
   IconFolder,
@@ -20,7 +21,7 @@ export const ResidentDocumentsModal: React.FC = () => {
   const { resident } = useResidentStore();
   const { getDocumentsForResident, folders } = useDocumentStore();
 
-  const residentFlat = resident.flat || 'A-101';
+  const residentFlat = resident?.flat && resident.flat !== 'No flat' ? resident.flat : '';
   const { societyWide, flatSpecific } = getDocumentsForResident(residentFlat);
 
   const [activeTab, setActiveTab] = useState<'my-flat' | 'society'>('my-flat');
@@ -28,8 +29,17 @@ export const ResidentDocumentsModal: React.FC = () => {
 
   const displayedDocs = activeTab === 'my-flat' ? flatSpecific : societyWide;
 
-  const handleDownload = (doc: SocietyDocument) => {
-    showToast(`Downloading "${doc.fileName}" (${doc.fileSize})...`);
+  const handleDownload = async (doc: SocietyDocument) => {
+    if (doc.fileId) {
+      try {
+        showToast(`Downloading "${doc.fileName}"...`);
+        await triggerFileDownload(doc.fileId, doc.fileName);
+      } catch (err: any) {
+        showToast(`Download failed: ${err?.backendMessage || err?.message || 'Unauthorized or file missing'}`);
+      }
+    } else {
+      showToast(`Downloading "${doc.fileName}" (${doc.fileSize})...`);
+    }
   };
 
   return (

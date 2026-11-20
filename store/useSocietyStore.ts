@@ -1,6 +1,20 @@
 import { create } from 'zustand';
 import { SocietyInfo } from '../types';
-import { initialSociety } from '../lib/mock-data';
+
+const emptySociety: SocietyInfo = {
+  id: '',
+  name: '',
+  regNo: '',
+  address: '',
+  tower: '',
+  currency: '₹',
+  graceDays: 0,
+  lateFeePercent: 0,
+  ratePerSqFt: 0,
+  whatsappConnected: false,
+  whatsappNumber: '',
+  societyHandle: ''
+};
 
 interface SocietyState {
   society: SocietyInfo;
@@ -10,7 +24,7 @@ interface SocietyState {
 }
 
 export const useSocietyStore = create<SocietyState>((set) => ({
-  society: initialSociety,
+  society: emptySociety,
   setSociety: (updated) =>
     set((state) => ({ society: { ...state.society, ...updated } })),
   updateSettings: (updated) =>

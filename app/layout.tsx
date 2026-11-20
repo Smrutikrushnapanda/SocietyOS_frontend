@@ -4,7 +4,11 @@ import { DeviceFrame } from '../components/layout/DeviceFrame';
 
 export const metadata: Metadata = {
   title: 'SocietyOS — Resident Portal',
-  description: 'Resident mobile application for Greenwood Heights Housing Society'
+  description: 'Resident mobile application for Greenwood Heights Housing Society',
+  icons: {
+    icon: '/assets/SocietyOsResidentIcon.png',
+    apple: '/assets/SocietyOsResidentIcon.png'
+  }
 };
 
 export const viewport: Viewport = {

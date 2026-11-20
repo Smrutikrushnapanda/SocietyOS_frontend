@@ -1,28 +1,51 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useVisitorStore, useToastStore } from '../../store';
 import { Badge } from '../common/Badge';
 import { EmptyState } from '../common/EmptyState';
+import { isCurrentGateApproval, localDayWindow } from '../../lib/visitors/visit-window';
 
 interface GateApprovalsPreviewProps {
   onViewAll?: () => void;
 }
 
 export const GateApprovalsPreview: React.FC<GateApprovalsPreviewProps> = ({ onViewAll }) => {
-  const { visitors, approveVisitor, denyVisitor } = useVisitorStore();
+  const { visitors, approveMyVisitor, rejectMyVisitor } = useVisitorStore();
   const { showToast } = useToastStore();
 
-  const previewVisitors = visitors.slice(0, 2);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const refresh = () => setNow(new Date());
+    const expiresAt = visitors.map(visitor => Date.parse(visitor.validityEnd || '')).filter(time => time > now.getTime());
+    const nextChange = Math.min(Date.parse(localDayWindow(now).dayEnd), ...expiresAt);
+    const timer = window.setTimeout(refresh, Math.max(1, nextChange - Date.now()));
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [now, visitors]);
+  const previewVisitors = visitors.filter(visitor => isCurrentGateApproval(visitor, now)).slice(0, 2);
 
-  const handleApprove = (id: string, name: string) => {
-    approveVisitor(id);
-    showToast(`Visitor ${name} approved! Gate security alerted.`);
+  const handleApprove = async (id: string, name: string) => {
+    try {
+      await approveMyVisitor(id);
+      showToast(`Visitor ${name} approved.`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not approve visitor.', 'error');
+    }
   };
 
-  const handleDeny = (id: string, name: string) => {
-    denyVisitor(id);
-    showToast(`Visitor ${name} entry denied.`);
+  const handleDeny = async (id: string, name: string) => {
+    try {
+      await rejectMyVisitor(id);
+      showToast(`Visitor ${name} entry rejected.`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not reject visitor.', 'error');
+    }
   };
 
   return (
@@ -54,8 +77,8 @@ export const GateApprovalsPreview: React.FC<GateApprovalsPreviewProps> = ({ onVi
 
       {previewVisitors.length === 0 ? (
         <EmptyState
-          title="No active visitors"
-          description="Your gate queue is currently empty."
+          title="No gate approvals for today"
+          description="Today's pending and approved visitors will appear here."
           style={{ padding: '16px' }}
         />
       ) : (
@@ -86,13 +109,13 @@ export const GateApprovalsPreview: React.FC<GateApprovalsPreviewProps> = ({ onVi
                 <button
                   className="btn btn-sm btn-primary"
                   style={{ flex: 1 }}
-                  onClick={() => handleApprove(v.id, v.name)}
+                  onClick={() => void handleApprove(v.id, v.name)}
                 >
                   Approve Entry
                 </button>
                 <button
                   className="btn btn-sm btn-danger"
-                  onClick={() => handleDeny(v.id, v.name)}
+                  onClick={() => void handleDeny(v.id, v.name)}
                 >
                   Deny
                 </button>

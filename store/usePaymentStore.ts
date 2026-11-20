@@ -1,104 +1,324 @@
+import { residentPreview } from '../lib/api/resident-feeds.api';
 import { create } from 'zustand';
-import { MaintenanceDue, InvoiceItem, PaymentReceipt, FlatDueRecord, LedgerTransaction } from '../types';
-import { initialMaintenanceDue, initialInvoiceBreakdown } from '../lib/mock-data';
+import {
+  MaintenanceDue,
+  InvoiceItem,
+  PaymentReceipt,
+  FlatDueRecord,
+  LedgerTransaction,
+} from '../types';
+import {
+  BackendMaintenanceDue,
+  BackendPayment,
+  BackendMaintenanceConfiguration,
+  getMyMaintenanceDues,
+  getOrganizationDues,
+  getOrganizationPayments,
+  getMaintenanceConfiguration,
+  markDuePaid,
+  markDueOverdue,
+  waiveLateCharge,
+  createPaymentRecord,
+} from '../lib/api/maintenance.api';
+import { ApiError } from '../lib/api/client';
+import { getUserFriendlyErrorMessage } from '../lib/api/errors';
+import { useAuthStore } from './useAuthStore';
 
-const initialDuesList: FlatDueRecord[] = [
-  { flat: 'A-101', residentName: 'Aarav Sharma', billingPeriod: 'Sep 2026', amountDue: 4500, amountPaid: 4500, status: 'paid' },
-  { flat: 'A-102', residentName: 'Priya Mukherjee', billingPeriod: 'Sep 2026', amountDue: 4500, amountPaid: 4500, status: 'paid' },
-  { flat: 'A-201', residentName: 'Deepak Verma', billingPeriod: 'Sep 2026', amountDue: 5800, amountPaid: 5800, status: 'paid' },
-  { flat: 'A-202', residentName: 'Ananya Iyer', billingPeriod: 'Sep 2026', amountDue: 5800, amountPaid: 5800, status: 'paid' },
-  { flat: 'A-301', residentName: 'Vikram Mehta', billingPeriod: 'Sep 2026', amountDue: 4500, amountPaid: 0, status: 'unpaid' },
-  { flat: 'A-302', residentName: 'Sunita Joshi', billingPeriod: 'Sep 2026', amountDue: 4500, amountPaid: 2000, status: 'partial' },
-  { flat: 'B-303', residentName: 'Meera Rao', billingPeriod: 'Sep 2026', amountDue: 5800, amountPaid: 5800, status: 'paid' },
-  { flat: 'B-501', residentName: 'Aditya Birla', billingPeriod: 'Sep 2026', amountDue: 8500, amountPaid: 8500, status: 'paid' }
-];
-
-const initialLedgerList: LedgerTransaction[] = [
-  { date: '10 Sep 2026', reference: 'TXN-991204', type: 'credit', description: 'Maintenance Payment via UPI Auto-Pay', debit: undefined, credit: 4500, balance: 0, flat: 'A-101' },
-  { date: '01 Sep 2026', reference: 'INV-SEP-101', type: 'debit', description: 'September 2026 Maintenance Assessment', debit: 4500, credit: undefined, balance: 4500, flat: 'A-101' },
-  { date: '05 Aug 2026', reference: 'TXN-884920', type: 'credit', description: 'August Maintenance via PhonePe', debit: undefined, credit: 4500, balance: 0, flat: 'A-101' }
-];
-
-interface PaymentState {
-  maintenanceDue: MaintenanceDue;
-  invoiceBreakdown: InvoiceItem[];
+export interface PaymentState {
+  // Resident view state
+  maintenanceDue: MaintenanceDue | null;
+  residentDues: BackendMaintenanceDue[];
+  residentPayments: BackendPayment[];
   receipts: PaymentReceipt[];
+  isLoadingResidentDues: boolean;
+  isLoadingResidentPayments: boolean;
+  residentError: string | null;
+  hasLoadedResidentDues: boolean;
+  hasLoadedResidentPayments: boolean;
+
+  // Admin view state
+  adminDues: BackendMaintenanceDue[];
+  adminPayments: BackendPayment[];
+  maintenanceConfig: BackendMaintenanceConfiguration | null;
+  isLoadingAdminData: boolean;
+  adminError: string | null;
+  hasLoadedAdminData: boolean;
+
+  // Invoice & Settings
+  invoiceBreakdown: InvoiceItem[];
   dues: FlatDueRecord[];
   ledger: LedgerTransaction[];
   whatsappBillingOptIn: boolean;
+
+  // Actions
   toggleWhatsAppBilling: () => void;
-  payWithUpi: (app: string) => PaymentReceipt;
-  recordPayment: (flat: string, amount: number, method: string) => void;
+  loadResidentDues: () => Promise<void>;
+  loadResidentPayments: () => Promise<void>;
+  loadAdminFinance: () => Promise<void>;
+  adminMarkDuePaid: (dueId: string) => Promise<void>;
+  adminMarkDueOverdue: (dueId: string) => Promise<void>;
+  adminWaiveLateCharge: (dueId: string, reason?: string, stopFutureCharges?: boolean) => Promise<void>;
+  adminRecordPayment: (payload: {
+    maintenance_due_id: string;
+    amount: number;
+    payment_method: 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'CARD';
+    resident_id?: string;
+    flat_id?: string;
+  }) => Promise<void>;
+  reset: () => void;
+}
+
+function formatPeriod(dateStr?: string | Date): string {
+  if (!dateStr) return 'Current';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+function formatDate(dateStr?: string | Date): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 export const usePaymentStore = create<PaymentState>((set, get) => ({
-  maintenanceDue: initialMaintenanceDue,
-  invoiceBreakdown: initialInvoiceBreakdown,
-  dues: initialDuesList,
-  ledger: initialLedgerList,
-  receipts: [
-    {
-      receiptNo: 'RCPT-2026-0819',
-      flat: 'A-101',
-      residentName: 'Aarav Sharma',
-      amount: 4500,
-      date: '2026-08-05',
-      method: 'UPI (PhonePe)',
-      period: 'August 2026',
-      refNo: 'TXN-UPI-8849201'
-    }
-  ],
+  maintenanceDue: null,
+  residentDues: [],
+  residentPayments: [],
+  receipts: [],
+  isLoadingResidentDues: false,
+  isLoadingResidentPayments: false,
+  residentError: null,
+  hasLoadedResidentDues: false,
+  hasLoadedResidentPayments: false,
+
+  adminDues: [],
+  adminPayments: [],
+  maintenanceConfig: null,
+  isLoadingAdminData: false,
+  adminError: null,
+  hasLoadedAdminData: false,
+
+  invoiceBreakdown: [],
+  dues: [],
+  ledger: [],
   whatsappBillingOptIn: true,
+
   toggleWhatsAppBilling: () =>
     set((state) => ({ whatsappBillingOptIn: !state.whatsappBillingOptIn })),
 
-  payWithUpi: (app: string) => {
-    const state = get();
-    const currentDue = state.maintenanceDue;
-    const amountToPay = currentDue.due - currentDue.paid;
-    const receiptNo = 'RCPT-2026-09' + Math.floor(10 + Math.random() * 89);
-    const refNo = 'TXN-UPI-' + Math.floor(100000 + Math.random() * 900000);
+  loadResidentDues: async () => {
+    set({ isLoadingResidentDues: true, residentError: null });
+    try {
+      const backendDues = await getMyMaintenanceDues();
+      // Primary due is the active/unpaid due or the latest due
+      const primaryDue =
+        backendDues.find((d) => d.status === 'PENDING' || d.status === 'OVERDUE') ??
+        backendDues[0] ??
+        null;
 
-    const newReceipt: PaymentReceipt = {
-      receiptNo,
-      flat: currentDue.flat,
-      residentName: 'Aarav Sharma',
-      amount: amountToPay > 0 ? amountToPay : currentDue.due,
-      date: new Date().toISOString().split('T')[0],
-      method: `UPI (${app})`,
-      period: currentDue.period,
-      refNo
-    };
+      let mappedDue: MaintenanceDue | null = null;
+      let breakdown: InvoiceItem[] = [];
 
-    set({
-      maintenanceDue: {
-        ...currentDue,
-        paid: currentDue.due,
-        status: 'paid'
-      },
-      receipts: [newReceipt, ...state.receipts]
-    });
+      if (primaryDue) {
+        const totalPayable = Number(primaryDue.calculated_amount) + Number(primaryDue.late_charge) - Number(primaryDue.late_charge_waived);
+        const isPaid = primaryDue.status === 'PAID';
+        const paidAmount = isPaid ? totalPayable : 0;
 
-    return newReceipt;
+        mappedDue = {
+          id: primaryDue.id,
+          flat: primaryDue.flat_id ? `Flat ${primaryDue.flat_id.slice(0, 5)}` : 'Assigned Unit',
+          due: totalPayable,
+          paid: paidAmount,
+          period: formatPeriod(primaryDue.billing_period_start),
+          dueDate: formatDate(primaryDue.due_date),
+          status: isPaid ? 'paid' : (primaryDue.status === 'OVERDUE' ? 'unpaid' : 'unpaid'),
+          originalAmount: Number(primaryDue.calculated_amount),
+          lateCharge: Number(primaryDue.late_charge),
+          lateChargeWaived: Number(primaryDue.late_charge_waived),
+          backendStatus: primaryDue.status,
+        };
+
+        breakdown = [
+          {
+            title: 'Base Maintenance Charge',
+            amount: Number(primaryDue.base_maintenance_amount) || Number(primaryDue.calculated_amount),
+          },
+        ];
+        if (Number(primaryDue.late_charge) > 0) {
+          breakdown.push({
+            title: 'Late Payment Surcharge',
+            amount: Number(primaryDue.late_charge),
+          });
+        }
+        if (Number(primaryDue.late_charge_waived) > 0) {
+          breakdown.push({
+            title: 'Late Charge Waived',
+            amount: -Number(primaryDue.late_charge_waived),
+          });
+        }
+      }
+
+      set({
+        residentDues: backendDues,
+        maintenanceDue: mappedDue,
+        invoiceBreakdown: breakdown,
+        isLoadingResidentDues: false,
+        hasLoadedResidentDues: true,
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof ApiError
+          ? err.backendMessage || 'Failed to load maintenance dues.'
+          : err instanceof Error
+          ? err.message
+          : 'Failed to load maintenance dues.';
+      set({
+        residentDues: [],
+        maintenanceDue: null,
+        invoiceBreakdown: [],
+        residentError: message,
+        isLoadingResidentDues: false,
+        hasLoadedResidentDues: true,
+      });
+    }
   },
 
-  recordPayment: (flat: string, amount: number, method: string) => {
-    set((state) => ({
-      dues: state.dues.map((d) =>
-        d.flat === flat ? { ...d, amountPaid: d.amountDue, status: 'paid' as const } : d
-      ),
-      ledger: [
-        {
-          date: 'Today',
-          reference: 'TXN-ADMIN-' + Math.floor(1000 + Math.random() * 9000),
-          type: 'credit',
-          description: `Manual Payment Recorded (${method})`,
-          credit: amount,
-          balance: 0,
-          flat
-        },
-        ...state.ledger
-      ]
-    }));
-  }
+  loadResidentPayments: async () => {
+    set({ isLoadingResidentPayments: true, residentError: null });
+    try {
+      const payments = await residentPreview<BackendPayment>('/maintenance/payments/my/page');
+      const receipts: PaymentReceipt[] = payments.map((p) => ({
+        receiptNo: `RCPT-${p.id.slice(0, 8).toUpperCase()}`,
+        flat: p.flat_id ? `Flat ${p.flat_id.slice(0, 5)}` : 'Assigned Unit',
+        residentName: 'Self',
+        amount: Number(p.amount),
+        date: formatDate(p.payment_date),
+        method: p.payment_method,
+        period: formatPeriod(p.payment_date),
+        refNo: p.transaction_id || `INT-${p.id.slice(0, 8).toUpperCase()}`,
+      }));
+
+      set({
+        residentPayments: payments,
+        receipts,
+        isLoadingResidentPayments: false,
+        hasLoadedResidentPayments: true,
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof ApiError
+          ? err.backendMessage || 'Failed to load payment history.'
+          : err instanceof Error
+          ? err.message
+          : 'Failed to load payment history.';
+      set({
+        residentError: message,
+        isLoadingResidentPayments: false,
+        hasLoadedResidentPayments: true,
+      });
+    }
+  },
+
+  loadAdminFinance: async () => {
+    set({ isLoadingAdminData: true, adminError: null });
+    try {
+      const [dues, payments, config] = await Promise.all([
+        getOrganizationDues().catch(() => [] as BackendMaintenanceDue[]),
+        getOrganizationPayments().catch(() => [] as BackendPayment[]),
+        getMaintenanceConfiguration().catch(() => null),
+      ]);
+
+      const flatDuesList: FlatDueRecord[] = dues.map((d) => {
+        const total = Number(d.calculated_amount) + Number(d.late_charge) - Number(d.late_charge_waived);
+        const isPaid = d.status === 'PAID';
+        return {
+          id: d.id,
+          flat: d.flat_id ? d.flat_id.slice(0, 6) : 'Unit',
+          residentName: 'Resident',
+          billingPeriod: formatPeriod(d.billing_period_start),
+          amountDue: total,
+          amountPaid: isPaid ? total : 0,
+          status: isPaid ? 'paid' : 'unpaid',
+          lateCharge: Math.max(0, Number(d.late_charge) - Number(d.late_charge_waived)),
+        };
+      });
+
+      const ledgerList: LedgerTransaction[] = payments.map((p) => ({
+        date: formatDate(p.payment_date),
+        reference: p.transaction_id || `TXN-${p.id.slice(0, 8).toUpperCase()}`,
+        type: 'credit',
+        description: `Payment via ${p.payment_method} (${p.payment_status})`,
+        credit: Number(p.amount),
+        balance: 0,
+        flat: p.flat_id ? p.flat_id.slice(0, 6) : undefined,
+        status: p.payment_status,
+      }));
+
+      set({
+        adminDues: dues,
+        adminPayments: payments,
+        maintenanceConfig: config,
+        dues: flatDuesList,
+        ledger: ledgerList,
+        isLoadingAdminData: false,
+        hasLoadedAdminData: true,
+      });
+    } catch (err: unknown) {
+      const message = getUserFriendlyErrorMessage(err, 'Failed to load finance data.');
+      set({
+        adminError: message,
+        isLoadingAdminData: false,
+        hasLoadedAdminData: true,
+      });
+    }
+  },
+
+  adminMarkDuePaid: async (dueId: string) => {
+    await markDuePaid(dueId);
+    await get().loadAdminFinance();
+  },
+
+  adminMarkDueOverdue: async (dueId: string) => {
+    await markDueOverdue(dueId);
+    await get().loadAdminFinance();
+  },
+
+  adminWaiveLateCharge: async (dueId: string, reason?: string, stopFutureCharges = true) => {
+    await waiveLateCharge(dueId, { reason, stop_future_charges: stopFutureCharges });
+    await get().loadAdminFinance();
+  },
+
+  adminRecordPayment: async (payload) => {
+    const orgId = typeof window !== 'undefined' ? (window as any).__ACTIVE_ORG_ID__ || '' : '';
+    await createPaymentRecord({
+      organization_id: orgId,
+      ...payload,
+    });
+    await get().loadAdminFinance();
+  },
+
+  reset: () =>
+    set({
+      residentDues: [],
+      residentPayments: [],
+      adminDues: [],
+      adminPayments: [],
+      maintenanceConfig: null,
+      isLoadingResidentDues: false,
+      isLoadingResidentPayments: false,
+      isLoadingAdminData: false,
+      residentError: null,
+      adminError: null,
+      hasLoadedResidentDues: false,
+      hasLoadedResidentPayments: false,
+      hasLoadedAdminData: false,
+    }),
 }));
+
+if (typeof window !== 'undefined') {
+  useAuthStore.subscribe((state, prevState) => {
+    if (state.organizationId !== prevState.organizationId) {
+      usePaymentStore.getState().reset();
+    }
+  });
+}

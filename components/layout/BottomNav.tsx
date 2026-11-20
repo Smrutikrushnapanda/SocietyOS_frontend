@@ -3,14 +3,15 @@
 import React from 'react';
 import clsx from 'clsx';
 
-export type TabType = 'home' | 'visitors' | 'complaints' | 'payments' | 'notices';
+export type TabType = 'home' | 'visitors' | 'complaints' | 'payments' | 'notices' | 'amenity-bookings';
 
 interface BottomNavProps {
   currentTab: TabType;
   onTabChange: (tab: TabType) => void;
+  hasNewPoll?: boolean;
 }
 
-export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange }) => {
+export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange, hasNewPoll = false }) => {
   return (
     <nav className="phone-bottom-nav">
       <button
@@ -68,7 +69,15 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange })
         className={clsx('nav-item', currentTab === 'notices' && 'active')}
         onClick={() => onTabChange('notices')}
         data-tab="notices"
+        aria-label={hasNewPoll ? 'Notices, new community poll' : 'Notices'}
       >
+        {hasNewPoll && (
+          <span className="nav-poll-indicator" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16v12H9l-5 4V5Z" /><path d="M8 9h8M8 13h5" /></svg>
+            <span>New poll</span>
+            <i />
+          </span>
+        )}
         <svg viewBox="0 0 24 24">
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />

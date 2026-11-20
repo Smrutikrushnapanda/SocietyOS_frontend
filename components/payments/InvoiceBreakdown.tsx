@@ -6,6 +6,10 @@ import { usePaymentStore } from '../../store';
 export const InvoiceBreakdown: React.FC = () => {
   const { invoiceBreakdown } = usePaymentStore();
 
+  if (!invoiceBreakdown || invoiceBreakdown.length === 0) {
+    return null;
+  }
+
   return (
     <>
       <h4 style={{ fontSize: '0.875rem', marginBottom: '8px' }}>
@@ -19,7 +23,9 @@ export const InvoiceBreakdown: React.FC = () => {
             style={{ borderBottom: index === invoiceBreakdown.length - 1 ? 'none' : undefined }}
           >
             <span>{item.title}</span>
-            <strong>₹{item.amount.toLocaleString('en-IN')}</strong>
+            <strong style={{ color: item.amount < 0 ? '#16a34a' : undefined }}>
+              {item.amount < 0 ? `-₹${Math.abs(item.amount).toLocaleString('en-IN')}` : `₹${item.amount.toLocaleString('en-IN')}`}
+            </strong>
           </div>
         ))}
       </div>

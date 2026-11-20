@@ -1,21 +1,28 @@
 export type PaymentStatus = 'paid' | 'unpaid' | 'partial';
 
 export interface MaintenanceDue {
+  id?: string;
   flat: string;
   due: number;
   paid: number;
   period: string;
   dueDate: string;
   status: PaymentStatus;
+  originalAmount?: number;
+  lateCharge?: number;
+  lateChargeWaived?: number;
+  backendStatus?: 'PENDING' | 'OVERDUE' | 'PAID';
 }
 
 export interface FlatDueRecord {
+  id?: string;
   flat: string;
   residentName: string;
   billingPeriod: string;
   amountDue: number;
   amountPaid: number;
   status: PaymentStatus;
+  lateCharge?: number;
 }
 
 export interface LedgerTransaction {
@@ -27,6 +34,7 @@ export interface LedgerTransaction {
   credit?: number;
   balance: number;
   flat?: string;
+  status?: string;
 }
 
 export interface InvoiceItem {

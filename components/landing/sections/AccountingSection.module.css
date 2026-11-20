@@ -1,0 +1,197 @@
+/* ── Accounting Section Styles ──────────────────────────────────── */
+
+.section {
+  padding: 104px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #eef2f6;
+  border-bottom: 1px solid #eef2f6;
+}
+
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 52px;
+  align-items: center;
+}
+
+/* Financial Card Visual */
+.visualCard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 28px;
+  padding: 32px;
+  box-shadow: 0 20px 50px -15px rgba(3, 95, 79, 0.12);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.ringRow {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 20px;
+}
+
+.ringDonut {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  background: conic-gradient(#035F4F 0% 86%, #e2e8f0 86% 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(3, 95, 79, 0.2);
+}
+
+.ringCenter {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 850;
+  font-size: 17px;
+  color: #035F4F;
+}
+
+.ringStats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ringBig {
+  font-size: 28px;
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.ringSub {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.ledgerList {
+  display: flex;
+  flex-direction: column;
+}
+
+.ledgerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  font-size: 13.5px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.ledgerLabel {
+  font-weight: 650;
+  color: #334155;
+}
+
+/* Copy Column */
+.copySide {
+  display: flex;
+  flex-direction: column;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 9999px;
+  background: #e6f4f1;
+  color: #035F4F;
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 16px;
+  width: fit-content;
+  border: 1px solid #cce8e2;
+}
+
+.title {
+  font-size: clamp(32px, 3.6vw, 46px);
+  font-weight: 850;
+  color: #0f172a;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  margin: 0 0 16px;
+}
+
+.highlight {
+  color: #035F4F;
+  background: linear-gradient(135deg, #035F4F 0%, #16A085 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.desc {
+  font-size: 16px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0 0 32px;
+}
+
+.pointsList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pointItem {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.pointIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #e6f4f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.pointTitle {
+  font-size: 15px;
+  font-weight: 750;
+  color: #0f172a;
+  margin: 0 0 3px;
+}
+
+.pointDesc {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.45;
+  margin: 0;
+}
+
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

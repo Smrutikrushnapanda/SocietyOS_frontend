@@ -20,54 +20,40 @@ interface StoredOTPRequest {
 
 const otpCache = new Map<string, StoredOTPRequest>();
 
-// Predefined test personas for quick 1-click test fill
+// Predefined test personas for quick 1-click test fill (strictly approved numbers)
 export const TEST_PERSONAS: Record<UserRole, TestPersona[]> = {
   admin: [
     {
       role: 'admin',
-      name: 'Kailash Malhotra',
-      phone: '9820000001',
-      badge: 'Estate Manager / President',
-      description: 'Full administrative rights, billing controls, and member management'
+      name: 'Babuna Panda',
+      phone: '6370412990',
+      badge: 'Society Admin • Greenwood Heights',
+      description: 'Society administrative rights, billing controls, and member management'
     },
     {
       role: 'admin',
       name: 'Sunita Rao',
-      phone: '9820000002',
-      badge: 'Managing Committee Treasurer',
-      description: 'Financial ledger, audit reports, and vendor contracts'
+      phone: '7008845326',
+      badge: 'Super Admin • Platform Scoped',
+      description: 'Platform super admin with cross-society oversight'
     }
   ],
   resident: [
     {
       role: 'resident',
       name: 'Aarav Sharma',
-      phone: '9820111001',
-      badge: 'Tower A • Flat 101 (Owner)',
-      description: '3 BHK owner profile with active guest passes and UPI maintenance dues'
-    },
-    {
-      role: 'resident',
-      name: 'Priya Mukherjee',
-      phone: '9820111002',
-      badge: 'Tower A • Flat 102 (Tenant)',
-      description: '2 BHK tenant profile with parking slot A-02'
+      phone: '7381142451',
+      badge: 'Tower A • Flat 101 (Resident)',
+      description: 'Verified resident profile with active dues and permissions'
     }
   ],
   guard: [
     {
       role: 'guard',
-      name: 'Deshmukh (Head Guard)',
-      phone: '9870044321',
+      name: 'Pramita (Security Guard)',
+      phone: '9348381944',
       badge: 'North Gate 01 Post',
-      description: 'Primary gate terminal with boom barrier scanner and queue'
-    },
-    {
-      role: 'guard',
-      name: 'Ramesh Yadav',
-      phone: '9870044322',
-      badge: 'South Gate 02 Post',
-      description: 'Secondary vehicular gate post with parking bay assignment'
+      description: 'Primary security gate terminal and visitor verification'
     }
   ]
 };
@@ -93,8 +79,10 @@ export function formatIndianPhoneDisplay(cleanPhone: string): string {
 
 export class MockWhatsAppOTPProvider implements IOTPProvider {
   private generateMockOTP(): string {
-    // Generate a 6-digit OTP
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate a deterministic 6-digit OTP for local development.
+    // Value "123456" is used strictly for development purposes only;
+    // never use this in production OTP providers.
+    return '123456';
   }
 
   async sendOTP(payload: OTPRequestPayload): Promise<OTPRequestResult> {
@@ -221,7 +209,7 @@ export class MockWhatsAppOTPProvider implements IOTPProvider {
           .slice(0, 2)
           .join('')
           .toUpperCase(),
-        societyId: 'SOC-001',
+        societyId: '',
         societyName: 'Greenwood Heights'
       };
     }
@@ -243,7 +231,7 @@ export class MockWhatsAppOTPProvider implements IOTPProvider {
       tower: role === 'resident' ? 'Tower A' : undefined,
       gate: role === 'guard' ? 'Gate 01' : undefined,
       avatarInitials: role === 'admin' ? 'AD' : role === 'guard' ? 'GD' : 'RS',
-      societyId: 'SOC-001',
+      societyId: '',
       societyName: 'Greenwood Heights'
     };
   }

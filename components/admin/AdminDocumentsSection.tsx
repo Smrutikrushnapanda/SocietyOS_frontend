@@ -1,182 +1,844 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import clsx from 'clsx';
-import { useDocumentStore, useToastStore } from '../../store';
-import { DocumentFolder, SocietyDocument } from '../../types/document';
+import { DocumentPreview } from '../common/DocumentPreview';
+import { useAdminLoading } from '../common/AdminLoading';
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
+import clsx from "clsx";
+import {
+  listFiles,
+  getFileStats,
+  uploadFile,
+  updateFileMetadata,
+  deleteFile,
+  triggerFileDownload,
+  FileMetadataRecord,
+  FileStatsResponse,
+  listFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  getFolderBreadcrumbs,
+  DocumentFolderRecord,
+} from "../../lib/api/files.api";
+import { getBuildings, BackendBuilding } from "../../lib/api/buildings.api";
+import { getFlats, BackendFlat } from "../../lib/api/flats.api";
+import { hasAnyPermission } from "../../lib/auth/rbac";
+import { useToastStore, useAuthStore } from "../../store";
 import {
   IconClose,
+  IconCheck,
+  IconBuilding,
+  IconHome,
+  IconShield,
+  IconFolder,
+  IconFileText,
   IconDownload,
-  IconCheck
-} from '../common/Icons';
+  IconEdit,
+  IconEye,
+  IconMoreVertical,
+  IconTrash,
+} from "../common/Icons";
+
+/** Mirrors the backend allow-list in file.service.ts. */
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".pdf",
+  ".txt",
+];
+const ACCEPT_ATTRIBUTE =
+  ".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain";
+
+const DOCUMENT_CATEGORIES = [
+  "By-Laws & Rules",
+  "Compliance & NOC",
+  "Financial & Audit",
+  "Legal & Deeds",
+  "Maintenance & AMC",
+  "Architecture & Plans",
+  "General",
+];
+
+type ViewTab = "all" | "society" | "flat" | "pending";
+type DocumentSortKey = "name" | "category" | "size" | "uploaded" | "status";
+
+function formatBytes(bytes: number, decimals = 1): string {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
+
+/** Turns an unknown API error into a message safe to show a user. */
+function extractErrorMessage(err: any, fallback: string): string {
+  const message =
+    err?.response?.data?.message ||
+    err?.response?.data?.error ||
+    err?.message ||
+    fallback;
+  return Array.isArray(message) ? message.join(", ") : String(message);
+}
 
 export const AdminDocumentsSection: React.FC = () => {
-  const {
-    folders,
-    documents,
-    createFolder,
-    deleteFolder,
-    uploadDocument,
-    deleteDocument,
-    assignDocumentToFlat
-  } = useDocumentStore();
   const { showToast } = useToastStore();
+  const documentRequest = useRef(0);
+  const folderRequest = useRef(0);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'society' | 'flat-vaults'>('all');
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [flatFilter, setFlatFilter] = useState('all');
+  // ── Server Data States ───────────────────────────────────────────────────
+  const [documents, setDocuments] = useState<FileMetadataRecord[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [stats, setStats] = useState<FileStatsResponse>({
+    total: 0,
+    societyCount: 0,
+    flatCount: 0,
+    pendingReviewCount: 0,
+  });
+  const [buildings, setBuildings] = useState<BackendBuilding[]>([]);
+  const [flats, setFlats] = useState<BackendFlat[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Modal states
-  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  // ── Folder State ─────────────────────────────────────────────────────────
+  const [folders, setFolders] = useState<DocumentFolderRecord[]>([]);
+  const [foldersLoading, setFoldersLoading] = useState(false);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [folderTrail, setFolderTrail] = useState<DocumentFolderRecord[]>([]);
+  const [selectedFolder, setSelectedFolder] =
+    useState<DocumentFolderRecord | null>(null);
+
+  // ── Filters & Tabs ───────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<ViewTab>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedBuildingId, setSelectedBuildingId] = useState("all");
+  const [selectedFlatId, setSelectedFlatId] = useState("all");
+  const [selectedStatus, setSelectedStatus] = useState("all");
+  const [selectedFolderFilter, setSelectedFolderFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortBy, setSortBy] = useState<DocumentSortKey>("uploaded");
+  const [sortOrder, setSortOrder] = useState<"ASC" | "DESC">("DESC");
+  const [openActionId, setOpenActionId] = useState<string | null>(null);
+
+  // ── Modals & Drawers ─────────────────────────────────────────────────────
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [previewDoc, setPreviewDoc] = useState<SocietyDocument | null>(null);
-  const [reassignDoc, setReassignDoc] = useState<SocietyDocument | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  const [showRenameFolderModal, setShowRenameFolderModal] = useState(false);
+  const [showDeleteFolderModal, setShowDeleteFolderModal] = useState(false);
+  const [selectedDoc, setSelectedDoc] = useState<FileMetadataRecord | null>(
+    null,
+  );
 
-  // Form states for Create Folder
-  const [newFolderName, setNewFolderName] = useState('');
-  const [newFolderDesc, setNewFolderDesc] = useState('');
-  const [newFolderCategory, setNewFolderCategory] = useState<'society' | 'flat-specific' | 'legal' | 'financial'>('society');
-  const [newFolderFlat, setNewFolderFlat] = useState('');
+  // ── Create Folder Form ───────────────────────────────────────────────────
+  const [folderName, setFolderName] = useState("");
+  const [folderDescription, setFolderDescription] = useState("");
+  const [folderType, setFolderType] = useState<"SOCIETY" | "FLAT">("SOCIETY");
+  const [folderParentId, setFolderParentId] = useState("");
+  const [folderBuildingId, setFolderBuildingId] = useState("");
+  const [folderFlatId, setFolderFlatId] = useState("");
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState<string | null>(
+    null,
+  );
 
-  // Form states for Upload Document
-  const [uploadTitle, setUploadTitle] = useState('');
-  const [uploadFileName, setUploadFileName] = useState('');
-  const [uploadFolderId, setUploadFolderId] = useState(folders[0]?.id || '');
-  const [uploadCategory, setUploadCategory] = useState('By-Laws & Rules');
-  const [uploadScope, setUploadScope] = useState<'society' | 'flat'>('society');
-  const [uploadFlat, setUploadFlat] = useState('A-101');
-  const [uploadDesc, setUploadDesc] = useState('');
+  // ── Rename Folder Form ───────────────────────────────────────────────────
+  const [renameValue, setRenameValue] = useState("");
+  const [renameDescription, setRenameDescription] = useState("");
+  const [isRenamingFolder, setIsRenamingFolder] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
-  // Filtered list
-  const filteredFolders = folders.filter((f) => {
-    if (activeTab === 'society') return f.category !== 'flat-specific';
-    if (activeTab === 'flat-vaults') return f.category === 'flat-specific';
-    if (flatFilter !== 'all') return f.assignedFlat === flatFilter;
-    return true;
-  });
+  // ── Delete Folder ────────────────────────────────────────────────────────
+  const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+  const [deleteFolderError, setDeleteFolderError] = useState<string | null>(
+    null,
+  );
 
-  const filteredDocuments = documents.filter((d) => {
-    if (selectedFolderId && d.folderId !== selectedFolderId) return false;
-    if (activeTab === 'society' && d.assignedFlat) return false;
-    if (activeTab === 'flat-vaults' && !d.assignedFlat) return false;
-    if (flatFilter !== 'all' && d.assignedFlat !== flatFilter) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return (
-        d.title.toLowerCase().includes(q) ||
-        d.fileName.toLowerCase().includes(q) ||
-        d.category.toLowerCase().includes(q) ||
-        (d.assignedFlat && d.assignedFlat.toLowerCase().includes(q))
+  // ── Upload Form States ───────────────────────────────────────────────────
+  const [uploadFileObj, setUploadFileObj] = useState<File | null>(null);
+  const [fileValidationError, setFileValidationError] = useState<string | null>(
+    null,
+  );
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadScope, setUploadScope] = useState<"SOCIETY" | "FLAT">("SOCIETY");
+  const [uploadCategory, setUploadCategory] = useState("By-Laws & Rules");
+  const [uploadBuildingId, setUploadBuildingId] = useState("");
+  const [uploadFlatId, setUploadFlatId] = useState("");
+  const [uploadFolderId, setUploadFolderId] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("ACTIVE");
+  const [uploadDescription, setUploadDescription] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ── Edit Form States ─────────────────────────────────────────────────────
+  const [editCategory, setEditCategory] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editStatus, setEditStatus] = useState("ACTIVE");
+  const [editFlatId, setEditFlatId] = useState("");
+  const [editFolderId, setEditFolderId] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  // ── Authorization ────────────────────────────────────────────────────────
+  // The backend remains the source of truth; this only hides actions the user
+  // cannot perform so the UI does not offer guaranteed-failing operations.
+  const canManage = hasAnyPermission(["file:manage"]);
+
+  // ── Fetch Buildings & Flats for Filters & Linking ─────────────────────────
+  useEffect(() => {
+    Promise.all([
+      getBuildings().catch(() => []),
+      getFlats().catch(() => []),
+    ]).then(([bList, fList]) => {
+      setBuildings(bList);
+      setFlats(fList);
+    });
+  }, []);
+
+  // ── Fetch Documents & Real Stats ─────────────────────────────────────────
+  const fetchDocuments = useCallback(async () => {
+    const request = ++documentRequest.current;
+    const scope = useAuthStore.getState();
+    const current = () => request === documentRequest.current && scope.organizationId === useAuthStore.getState().organizationId && scope.backendUser?.id === useAuthStore.getState().backendUser?.id;
+    setIsLoading(true);
+    try {
+      const scopeParam =
+        activeTab === "society"
+          ? "SOCIETY"
+          : activeTab === "flat"
+            ? "FLAT"
+            : undefined;
+      const statusParam =
+        activeTab === "pending"
+          ? "PENDING"
+          : selectedStatus !== "all"
+            ? selectedStatus
+            : undefined;
+
+      // Inside a folder the location is authoritative; otherwise fall back to
+      // the folder dropdown in the toolbar.
+      const folderParam = currentFolderId
+        ? currentFolderId
+        : selectedFolderFilter !== "all"
+          ? selectedFolderFilter
+          : undefined;
+
+      // No catch() fallbacks here — a failed request must surface as an error
+      // state rather than silently rendering an empty list.
+      const [listResult, statsResult] = await Promise.all([
+        listFiles({
+          scope: scopeParam,
+          category: selectedCategory !== "all" ? selectedCategory : undefined,
+          buildingId:
+            selectedBuildingId !== "all" ? selectedBuildingId : undefined,
+          flatId: selectedFlatId !== "all" ? selectedFlatId : undefined,
+          folderId: folderParam,
+          status: statusParam,
+          search: searchQuery.trim() || undefined,
+          page,
+          limit: pageSize,
+          sortBy,
+          sortOrder,
+        }),
+        getFileStats(),
+      ]);
+
+      if (!current()) return;
+      setDocuments(listResult.data);
+      setTotalCount(listResult.total);
+      setStats(statsResult);
+      setLoadError(null);
+    } catch (err: any) {
+      if (!current()) return;
+      setDocuments([]);
+      setTotalCount(0);
+      setLoadError(
+        extractErrorMessage(
+          err,
+          "Unable to load documents from the repository.",
+        ),
       );
+    } finally {
+      if (current()) setIsLoading(false);
     }
-    return true;
-  });
+  }, [
+    activeTab,
+    selectedCategory,
+    selectedBuildingId,
+    selectedFlatId,
+    selectedStatus,
+    selectedFolderFilter,
+    currentFolderId,
+    searchQuery,
+    page,
+    pageSize,
+    sortBy,
+    sortOrder,
+  ]);
 
-  const handleCreateFolder = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFolderName.trim()) {
-      alert('Please enter a folder name');
+  useEffect(() => {
+    void fetchDocuments();
+  }, [fetchDocuments]);
+
+  const toggleSort = (column: DocumentSortKey) => {
+    setSortOrder((current) =>
+      sortBy === column && current === "ASC" ? "DESC" : "ASC",
+    );
+    setSortBy(column);
+    setPage(1);
+  };
+
+  const sortIndicator = (column: DocumentSortKey) =>
+    sortBy === column ? (sortOrder === "ASC" ? "↑" : "↓") : "↕";
+
+  // ── Folder Loading ───────────────────────────────────────────────────────
+  const fetchFolders = useCallback(
+    async (parentId: string | null) => {
+      const request = ++folderRequest.current;
+      setFoldersLoading(true);
+      try {
+        const { data } = await listFolders(
+          parentId ? { parentId } : { parentId: "root" },
+        );
+        if (request !== folderRequest.current) return;
+        setFolders(data);
+      } catch (err: any) {
+        if (request !== folderRequest.current) return;
+        setFolders([]);
+        showToast(extractErrorMessage(err, "Unable to load folders"));
+      } finally {
+        if (request === folderRequest.current) setFoldersLoading(false);
+      }
+    },
+    [showToast],
+  );
+
+  // Refresh the breadcrumb trail whenever the active folder changes.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!currentFolderId) {
+      setFolderTrail([]);
+      setSelectedFolder(null);
       return;
     }
 
-    const created = createFolder({
-      name: newFolderName.trim(),
-      description: newFolderDesc.trim() || undefined,
-      category: newFolderCategory,
-      assignedFlat: newFolderCategory === 'flat-specific' ? newFolderFlat.trim() || 'A-101' : null,
-      color: newFolderCategory === 'flat-specific' ? '#e08a2c' : '#2e7559'
-    });
+    getFolderBreadcrumbs(currentFolderId)
+      .then((res) => {
+        if (cancelled) return;
+        setFolderTrail(res.data);
+        setSelectedFolder(res.folder);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFolderTrail([]);
+        setSelectedFolder(null);
+      });
 
-    setShowCreateFolderModal(false);
-    setNewFolderName('');
-    setNewFolderDesc('');
-    setNewFolderFlat('');
-    showToast(`Folder "${created.name}" created successfully!`);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFolderId]);
+
+  // Load the folder grid for the current location.
+  useEffect(() => {
+    void fetchFolders(currentFolderId);
+  }, [fetchFolders, currentFolderId]);
+
+  /** Opens a folder: records the breadcrumb and scopes documents to it. */
+  const openFolder = (folder: DocumentFolderRecord) => {
+    setCurrentFolderId(folder.id);
+    setSelectedFolder(folder);
+    setPage(1);
+    setSearchQuery("");
   };
 
-  const handleUploadDocument = (e: React.FormEvent) => {
+  /** Navigates to any ancestor in the breadcrumb, or the root when null. */
+  const navigateToFolder = (folderId: string | null) => {
+    setCurrentFolderId(folderId);
+    setPage(1);
+  };
+
+  // Reset page when filters change
+  const handleTabChange = (tab: ViewTab) => {
+    setActiveTab(tab);
+    setPage(1);
+  };
+
+  // ── File Validation ──────────────────────────────────────────────────────
+  // Mirrors the backend rules so users get immediate feedback. The backend
+  // re-validates regardless — this is convenience, not the security boundary.
+  const validateSelectedFile = useCallback(
+    (file: File | null): string | null => {
+      if (!file) return "Please select a file to upload.";
+
+      const ext = `.${file.name.split(".").pop()?.toLowerCase() || ""}`;
+      if (!ALLOWED_EXTENSIONS.includes(ext)) {
+        return `Unsupported file type "${ext || "unknown"}". Allowed: ${ALLOWED_EXTENSIONS.join(", ")}`;
+      }
+      if (file.size === 0) {
+        return "The selected file is empty.";
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        return `File is ${formatBytes(file.size)}. Maximum allowed size is ${formatBytes(
+          MAX_FILE_BYTES,
+          0,
+        )}.`;
+      }
+      return null;
+    },
+    [],
+  );
+
+  const handleFileSelected = (file: File | null) => {
+    setUploadFileObj(file);
+    setUploadProgress(null);
+    setFileValidationError(validateSelectedFile(file));
+  };
+
+  const resetUploadForm = () => {
+    setUploadFileObj(null);
+    setFileValidationError(null);
+    setUploadProgress(null);
+    setUploadFolderId("");
+    setUploadDescription("");
+    setUploadFlatId("");
+    setUploadBuildingId("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  /** Opens the upload modal, pre-selecting the folder the user is browsing. */
+  const openUploadModal = (folderIdOverride?: string | null) => {
+    const destination =
+      folderIdOverride !== undefined ? folderIdOverride : currentFolderId;
+
+    setUploadFolderId(destination || "");
+    setFileValidationError(null);
+    setUploadProgress(null);
+    setShowUploadModal(true);
+
+    // Inherit scope from the destination folder so flat vaults stay private.
+    if (destination) {
+      const destinationFolder = folders.find((f) => f.id === destination);
+      if (destinationFolder) {
+        setUploadScope(
+          destinationFolder.folder_type === "FLAT" ? "FLAT" : "SOCIETY",
+        );
+        setUploadFlatId(destinationFolder.flat_id || "");
+        setUploadBuildingId(destinationFolder.building_id || "");
+        return;
+      }
+    }
+
+    setUploadScope("SOCIETY");
+  };
+
+  // ── Upload Handler ───────────────────────────────────────────────────────
+  const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadTitle.trim()) {
-      alert('Please enter a document title');
+
+    const validationError = validateSelectedFile(uploadFileObj);
+    if (validationError) {
+      setFileValidationError(validationError);
+      return;
+    }
+    if (!uploadFileObj) {
+      setFileValidationError("Please select a file to upload.");
       return;
     }
 
-    const fName = uploadFileName.trim() || `${uploadTitle.trim().replace(/\s+/g, '_')}.pdf`;
-    const assignedFlat = uploadScope === 'flat' ? uploadFlat : null;
+    if (uploadScope === "FLAT" && !uploadFlatId) {
+      setFileValidationError(
+        "Select an authorized flat for this flat vault document.",
+      );
+      return;
+    }
 
-    const created = uploadDocument({
-      folderId: uploadFolderId || folders[0]?.id || 'general',
-      title: uploadTitle.trim(),
-      fileName: fName,
-      fileType: 'pdf',
-      fileSize: `${(Math.random() * 3 + 0.8).toFixed(1)} MB`,
-      uploadedBy: 'Anand Deshmukh (Secretary)',
-      assignedFlat,
-      isPublicToAll: !assignedFlat,
-      category: uploadCategory,
-      description: uploadDesc.trim() || undefined
-    });
+    setIsUploading(true);
+    setUploadProgress(0);
+    setFileValidationError(null);
 
-    setShowUploadModal(false);
-    setUploadTitle('');
-    setUploadFileName('');
-    setUploadDesc('');
-    showToast(
-      assignedFlat
-        ? `Document assigned to Flat ${assignedFlat} and synced to Resident App!`
-        : `Document "${created.title}" published to Society Repository!`
-    );
+    try {
+      await uploadFile(uploadFileObj, {
+        purpose: 'DOCUMENT',
+        documentScope: uploadScope,
+        category: uploadCategory,
+        buildingId: uploadBuildingId || undefined,
+        flatId: uploadScope === "FLAT" ? uploadFlatId : undefined,
+        folderId: uploadFolderId || undefined,
+        status: uploadStatus,
+        description: uploadDescription.trim() || undefined,
+      });
+
+      // Only close and clear after the API confirms success.
+      showToast(`Document "${uploadFileObj.name}" uploaded successfully`);
+      resetUploadForm();
+      setShowUploadModal(false);
+      await fetchDocuments();
+      await fetchFolders(currentFolderId);
+    } catch (err: any) {
+      // Keep the modal open and retain every field so the user can retry.
+      setFileValidationError(
+        extractErrorMessage(err, "Failed to upload document"),
+      );
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(null);
+    }
   };
 
-  const handleOpenPreview = (doc: SocietyDocument) => {
-    setPreviewDoc(doc);
-    setShowPreviewModal(true);
+  // ── Create Folder Handler ────────────────────────────────────────────────
+  const openCreateFolderModal = () => {
+    setFolderName("");
+    setFolderDescription("");
+    // A nested folder inherits its parent's type by design.
+    setFolderType(selectedFolder?.folder_type === "FLAT" ? "FLAT" : "SOCIETY");
+    setFolderParentId(currentFolderId || "");
+    setFolderBuildingId(selectedFolder?.building_id || "");
+    setFolderFlatId(selectedFolder?.flat_id || "");
+    setCreateFolderError(null);
+    setShowCreateFolderModal(true);
   };
 
-  const handleSaveReassign = (flat: string | null) => {
-    if (!reassignDoc) return;
-    assignDocumentToFlat(reassignDoc.id, flat);
-    showToast(
-      flat
-        ? `Document reassigned to Flat ${flat}! Resident can now see it on their mobile app.`
-        : 'Document made public to entire society.'
-    );
-    setReassignDoc(null);
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!folderName.trim()) {
+      setCreateFolderError("Folder name is required.");
+      return;
+    }
+    if (folderType === "FLAT" && !folderFlatId && !folderParentId) {
+      setCreateFolderError("A flat vault folder must be assigned to a flat.");
+      return;
+    }
+
+    setIsCreatingFolder(true);
+    setCreateFolderError(null);
+
+    try {
+      const created = await createFolder({
+        name: folderName.trim(),
+        description: folderDescription.trim() || null,
+        folderType,
+        parentId: folderParentId || null,
+        buildingId: folderBuildingId || null,
+        flatId: folderFlatId || null,
+      });
+
+      showToast(`Folder "${created.name}" created`);
+      setShowCreateFolderModal(false);
+      await fetchFolders(currentFolderId);
+    } catch (err: any) {
+      setCreateFolderError(extractErrorMessage(err, "Failed to create folder"));
+    } finally {
+      setIsCreatingFolder(false);
+    }
   };
+
+  // ── Rename Folder Handler ────────────────────────────────────────────────
+  const openRenameFolderModal = (folder: DocumentFolderRecord) => {
+    setSelectedFolder(folder);
+    setRenameValue(folder.name);
+    setRenameDescription(folder.description || "");
+    setRenameError(null);
+    setShowRenameFolderModal(true);
+  };
+
+  const handleRenameFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!renameValue.trim()) {
+      setRenameError("Folder name is required.");
+      return;
+    }
+    if (!selectedFolder) return;
+
+    setIsRenamingFolder(true);
+    setRenameError(null);
+
+    try {
+      await renameFolder(selectedFolder.id, {
+        name: renameValue.trim(),
+        description: renameDescription.trim() || null,
+      });
+
+      showToast("Folder updated");
+      setShowRenameFolderModal(false);
+      await fetchFolders(selectedFolder.parent_id ?? null);
+
+      // Keep the breadcrumb accurate if the open folder itself was renamed.
+      if (currentFolderId === selectedFolder.id) {
+        const res = await getFolderBreadcrumbs(selectedFolder.id);
+        setFolderTrail(res.data);
+        setSelectedFolder(res.folder);
+      }
+    } catch (err: any) {
+      setRenameError(extractErrorMessage(err, "Failed to update folder"));
+    } finally {
+      setIsRenamingFolder(false);
+    }
+  };
+
+  // ── Delete Folder Handler ────────────────────────────────────────────────
+  const openDeleteFolderModal = (folder: DocumentFolderRecord) => {
+    setSelectedFolder(folder);
+    setDeleteFolderError(null);
+    setShowDeleteFolderModal(true);
+  };
+
+  const handleDeleteFolder = async (contentHandling?: "detach" | "archive") => {
+    if (!selectedFolder) return;
+
+    setIsDeletingFolder(true);
+    setDeleteFolderError(null);
+
+    try {
+      const result = await deleteFolder(selectedFolder.id, contentHandling);
+
+      const summary =
+        result.archivedFiles > 0
+          ? `${result.archivedFiles} document(s) archived`
+          : result.detachedFiles > 0
+            ? `${result.detachedFiles} document(s) moved to repository root`
+            : "";
+
+      showToast(
+        summary
+          ? `Folder "${selectedFolder.name}" deleted — ${summary}`
+          : `Folder "${selectedFolder.name}" deleted`,
+      );
+
+      setShowDeleteFolderModal(false);
+
+      // If we deleted the folder we were inside, step back to its parent.
+      if (currentFolderId === selectedFolder.id) {
+        setCurrentFolderId(selectedFolder.parent_id ?? null);
+      }
+      setSelectedFolder(null);
+      await fetchFolders(currentFolderId);
+      await fetchDocuments();
+    } catch (err: any) {
+      setDeleteFolderError(extractErrorMessage(err, "Failed to delete folder"));
+    } finally {
+      setIsDeletingFolder(false);
+    }
+  };
+  // ── Edit Metadata Handler ────────────────────────────────────────────────
+  const handleOpenEdit = (doc: FileMetadataRecord) => {
+    setSelectedDoc(doc);
+    setEditCategory(doc.category || "General");
+    setEditDescription(doc.description || "");
+    setEditStatus(doc.status || "ACTIVE");
+    setEditFlatId(doc.flat_id || "");
+    setEditFolderId(doc.folder_id || "");
+    setShowEditModal(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDoc) return;
+
+    setIsUpdating(true);
+    try {
+      await updateFileMetadata(selectedDoc.id, {
+        category: editCategory,
+        description: editDescription.trim() || undefined,
+        status: editStatus,
+        flatId: editFlatId || null,
+        folderId: editFolderId || null,
+      });
+      showToast("Document metadata updated successfully");
+      setShowEditModal(false);
+      await fetchDocuments();
+      await fetchFolders(currentFolderId);
+    } catch (err: any) {
+      showToast(extractErrorMessage(err, "Failed to update metadata"));
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  // ── Delete Handler ───────────────────────────────────────────────────────
+  const handleConfirmDelete = async () => {
+    if (!selectedDoc) return;
+    try {
+      await deleteFile(selectedDoc.id);
+      showToast(`Document "${selectedDoc.original_filename}" removed`);
+      setShowDeleteModal(false);
+      setSelectedDoc(null);
+      await fetchDocuments();
+      await fetchFolders(currentFolderId);
+    } catch (err: any) {
+      showToast(extractErrorMessage(err, "Failed to delete file"));
+    }
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const getFlatLabel = (flatId?: string | null) => {
+    if (!flatId) return null;
+    const found = flats.find((f) => f.id === flatId);
+    return found
+      ? `Flat ${found.flat_identifier}`
+      : `Flat ${flatId.substring(0, 8)}`;
+  };
+
+  const getBuildingLabel = (buildingId?: string | null) => {
+    if (!buildingId) return null;
+    const found = buildings.find((b) => b.id === buildingId);
+    return found ? found.name : null;
+  };
+
+  /** Resolves a folder name from the currently loaded folder set. */
+  const getFolderName = (folderId?: string | null) => {
+    if (!folderId) return null;
+    const found = folders.find((f) => f.id === folderId);
+    if (found) return found.name;
+    if (folderId === currentFolderId && selectedFolder)
+      return selectedFolder.name;
+    return null;
+  };
+
+  const availableFlatsForUpload = useMemo(() => {
+    if (!uploadBuildingId) return flats;
+    return flats.filter((f) => f.building_id === uploadBuildingId);
+  }, [flats, uploadBuildingId]);
+
+  // Removable chips mirroring whichever filters are currently narrowing results.
+  const activeFilterChips = useMemo(() => {
+    const chips: {
+      key: string;
+      label: string;
+      value: string;
+      clear: () => void;
+    }[] = [];
+
+    if (searchQuery.trim()) {
+      chips.push({
+        key: "search",
+        label: "Search",
+        value: `"${searchQuery.trim()}"`,
+        clear: () => {
+          setSearchQuery("");
+          setPage(1);
+        },
+      });
+    }
+    if (selectedCategory !== "all") {
+      chips.push({
+        key: "category",
+        label: "Category",
+        value: selectedCategory,
+        clear: () => {
+          setSelectedCategory("all");
+          setPage(1);
+        },
+      });
+    }
+    if (selectedBuildingId !== "all") {
+      chips.push({
+        key: "building",
+        label: "Building",
+        value: getBuildingLabel(selectedBuildingId) || "Selected",
+        clear: () => {
+          setSelectedBuildingId("all");
+          setSelectedFlatId("all");
+          setPage(1);
+        },
+      });
+    }
+    if (selectedFlatId !== "all") {
+      chips.push({
+        key: "flat",
+        label: "Flat",
+        value: getFlatLabel(selectedFlatId) || "Selected",
+        clear: () => {
+          setSelectedFlatId("all");
+          setPage(1);
+        },
+      });
+    }
+    if (selectedStatus !== "all") {
+      chips.push({
+        key: "status",
+        label: "Status",
+        value:
+          selectedStatus === "ACTIVE"
+            ? "Active"
+            : selectedStatus === "PENDING"
+              ? "Pending Review"
+              : "Archived",
+        clear: () => {
+          setSelectedStatus("all");
+          setPage(1);
+        },
+      });
+    }
+
+    return chips;
+  }, [
+    searchQuery,
+    selectedCategory,
+    selectedBuildingId,
+    selectedFlatId,
+    selectedStatus,
+    buildings,
+    flats,
+  ]);
+
+  useAdminLoading(isLoading || foldersLoading, 'Loading documents and vaults…');
 
   return (
     <div className="admin-section active" id="section-documents">
-      {/* 1. Header KPIs & Vault Stats */}
-      <div className="section-header-banner" style={{ marginBottom: '20px' }}>
-        <div className="header-text-block">
-          <h2 className="header-title">Document Repository & Flat Vaults</h2>
-          <p className="header-subtitle">
-            Manage society bye-laws, compliance certificates, and assign confidential deeds &amp; NOCs to specific flats
+      {/* ── 1. Page Header ───────────────────────────────────────────────── */}
+      <div className="section-header">
+        <div>
+          <span className="doc-eyebrow">
+            <span className="doc-eyebrow-dot" />
+            Secure Document Control
+          </span>
+          <h2 style={{ margin: 0 }}>Documents &amp; Flat Vaults</h2>
+          <p className="doc-page-desc" style={{ marginTop: "6px" }}>
+            Organize society documents and securely manage flat-specific files.
           </p>
         </div>
-        <div className="header-actions-row" style={{ display: 'flex', gap: '8px' }}>
+        <div className="section-actions">
           <button
             type="button"
             className="btn btn-secondary"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-            onClick={() => setShowCreateFolderModal(true)}
+            onClick={openCreateFolderModal}
+            style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              <line x1="12" y1="11" x2="12" y2="17" />
-              <line x1="9" y1="14" x2="15" y2="14" />
-            </svg>
-            <span>New Folder</span>
+            <IconFolder size={16} />
+            <span>Create Folder</span>
           </button>
           <button
             type="button"
             className="btn btn-primary"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-            onClick={() => setShowUploadModal(true)}
+            onClick={() => openUploadModal()}
+            style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
@@ -186,129 +848,149 @@ export const AdminDocumentsSection: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Cards Strip */}
-      <div className="kpi-grid" style={{ marginBottom: '20px' }}>
-        <div className="kpi-card">
-          <div className="kpi-icon-wrap" style={{ backgroundColor: 'rgba(46, 117, 89, 0.12)', color: 'var(--pine)' }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      {/* ── 2. Real Summary KPI Cards ────────────────────────────────────── */}
+      <div className="kpi-grid" style={{ marginBottom: "24px" }}>
+        <div
+          className="kpi-card doc-kpi"
+          style={{ border: "1px solid var(--border-subtle)" }}
+        >
+          <div
+            className="kpi-icon-wrap"
+            style={{
+              backgroundColor: "rgba(46, 117, 89, 0.1)",
+              color: "var(--pine)",
+            }}
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
             </svg>
           </div>
           <div className="kpi-data">
             <span className="kpi-label">Total Documents</span>
-            <h3 className="kpi-value">{documents.length} Files</h3>
-            <span className="kpi-subtext" style={{ color: 'var(--pine)' }}>16.4 MB Cloud Storage</span>
+            <h3 className="kpi-value" style={{ margin: 0 }}>
+              {stats.total}
+            </h3>
+            <span className="kpi-subtext" style={{ color: "var(--pine)" }}>
+              Live Database Records
+            </span>
           </div>
         </div>
 
-        <div className="kpi-card">
-          <div className="kpi-icon-wrap" style={{ backgroundColor: 'rgba(2, 132, 199, 0.12)', color: '#0284c7' }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
+        <div
+          className="kpi-card doc-kpi"
+          style={{ border: "1px solid var(--border-subtle)" }}
+        >
+          <div
+            className="kpi-icon-wrap"
+            style={{
+              backgroundColor: "var(--info-tint)",
+              color: "var(--info)",
+            }}
+          >
+            <IconBuilding size={22} />
           </div>
           <div className="kpi-data">
-            <span className="kpi-label">Active Folders</span>
-            <h3 className="kpi-value">{folders.length} Folders</h3>
-            <span className="kpi-subtext">Categorized &amp; Structured</span>
+            <span className="kpi-label">Society Documents</span>
+            <h3 className="kpi-value" style={{ margin: 0 }}>
+              {stats.societyCount}
+            </h3>
+            <span className="kpi-subtext">Compliance &amp; By-Laws</span>
           </div>
         </div>
 
-        <div className="kpi-card">
-          <div className="kpi-icon-wrap" style={{ backgroundColor: 'rgba(224, 138, 44, 0.12)', color: 'var(--saffron-dark)' }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <div
+          className="kpi-card doc-kpi"
+          style={{ border: "1px solid var(--border-subtle)" }}
+        >
+          <div
+            className="kpi-icon-wrap"
+            style={{
+              backgroundColor: "var(--saffron-tint)",
+              color: "var(--saffron-dark)",
+            }}
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <rect width="18" height="18" x="3" y="3" rx="2" />
               <path d="M3 9h18" />
               <path d="M9 21V9" />
             </svg>
           </div>
           <div className="kpi-data">
-            <span className="kpi-label">Flat-Assigned Vaults</span>
-            <h3 className="kpi-value">
-              {documents.filter((d) => d.assignedFlat).length} Confidential Docs
+            <span className="kpi-label">Flat Documents</span>
+            <h3 className="kpi-value" style={{ margin: 0 }}>
+              {stats.flatCount}
             </h3>
-            <span className="kpi-subtext" style={{ color: 'var(--saffron-dark)' }}>
-              Visible on Resident Mobile App
+            <span
+              className="kpi-subtext"
+              style={{ color: "var(--saffron-dark)" }}
+            >
+              Confidential Resident Vaults
             </span>
           </div>
         </div>
 
-        <div className="kpi-card">
-          <div className="kpi-icon-wrap" style={{ backgroundColor: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <div
+          className="kpi-card doc-kpi"
+          style={{ border: "1px solid var(--border-subtle)" }}
+        >
+          <div
+            className="kpi-icon-wrap"
+            style={{
+              backgroundColor: "var(--danger-tint)",
+              color: "var(--danger)",
+            }}
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
             </svg>
           </div>
           <div className="kpi-data">
-            <span className="kpi-label">Society Compliance</span>
-            <h3 className="kpi-value">100% Up to Date</h3>
-            <span className="kpi-subtext" style={{ color: '#10b981' }}>Fire NOC &amp; OC Active</span>
+            <span className="kpi-label">Pending Review</span>
+            <h3 className="kpi-value" style={{ margin: 0 }}>
+              {stats.pendingReviewCount}
+            </h3>
+            <span className="kpi-subtext">Awaiting Verification</span>
           </div>
         </div>
       </div>
 
-      {/* 2. Subnav & Search Controls */}
-      <div className="admin-filter-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap' }}>
-        <div className="module-subnav" style={{ margin: 0 }}>
-          <button
-            type="button"
-            className={clsx('subnav-btn', activeTab === 'all' && 'active')}
-            onClick={() => {
-              setActiveTab('all');
-              setSelectedFolderId(null);
-            }}
-          >
-            All Folders &amp; Files
-          </button>
-          <button
-            type="button"
-            className={clsx('subnav-btn', activeTab === 'society' && 'active')}
-            onClick={() => {
-              setActiveTab('society');
-              setSelectedFolderId(null);
-            }}
-          >
-            Society Compliance &amp; By-Laws
-          </button>
-          <button
-            type="button"
-            className={clsx('subnav-btn', activeTab === 'flat-vaults' && 'active')}
-            onClick={() => {
-              setActiveTab('flat-vaults');
-              setSelectedFolderId(null);
-            }}
-          >
-            Flat-Specific Resident Vaults
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {/* Flat Filter Dropdown */}
-          <select
-            className="select"
-            style={{ fontSize: '0.8125rem', padding: '6px 12px', minWidth: '140px' }}
-            value={flatFilter}
-            onChange={(e) => setFlatFilter(e.target.value)}
-          >
-            <option value="all">Filter: All Flats</option>
-            <option value="A-101">Flat A-101 (Aarav Sharma)</option>
-            <option value="A-102">Flat A-102 (Vikram Malhotra)</option>
-            <option value="B-201">Flat B-201 (Pooja Nair)</option>
-            <option value="B-302">Flat B-302 (Karan Singhania)</option>
-            <option value="C-501">Flat C-501 (Dr. Ramesh Rao)</option>
-          </select>
-
-          {/* Search Input */}
-          <div style={{ position: 'relative' }}>
-            <input
-              type="text"
-              className="input"
-              placeholder="Search documents, tags, flats..."
-              style={{ fontSize: '0.8125rem', padding: '6px 12px 6px 32px', minWidth: '220px' }}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
+      {/* ── 3. Tabs Navigation ───────────────────────────────────────────── */}
+      <div
+        className="doc-tabs"
+        role="tablist"
+        aria-label="Document scope views"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "all"}
+          className={clsx("doc-tab", activeTab === "all" && "active")}
+          onClick={() => handleTabChange("all")}
+        >
+          <span className="doc-tab-icon">
             <svg
               width="14"
               height="14"
@@ -316,464 +998,1253 @@ export const AdminDocumentsSection: React.FC = () => {
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
-              style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--neutral)' }}
             >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
-          </div>
-        </div>
+          </span>
+          <span className="doc-tab-label">All Documents</span>
+          <span className="doc-tab-count">{stats.total}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "society"}
+          className={clsx(
+            "doc-tab",
+            "doc-tab--society",
+            activeTab === "society" && "active",
+          )}
+          onClick={() => handleTabChange("society")}
+        >
+          <span className="doc-tab-icon">
+            <IconBuilding size={14} />
+          </span>
+          <span className="doc-tab-label">Society Repository</span>
+          <span className="doc-tab-count">{stats.societyCount}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "flat"}
+          className={clsx(
+            "doc-tab",
+            "doc-tab--flat",
+            activeTab === "flat" && "active",
+          )}
+          onClick={() => handleTabChange("flat")}
+        >
+          <span className="doc-tab-icon">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect width="18" height="18" x="3" y="3" rx="2" />
+              <path d="M3 9h18" />
+              <path d="M9 21V9" />
+            </svg>
+          </span>
+          <span className="doc-tab-label">Flat Vaults</span>
+          <span className="doc-tab-count">{stats.flatCount}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "pending"}
+          className={clsx(
+            "doc-tab",
+            "doc-tab--pending",
+            activeTab === "pending" && "active",
+          )}
+          onClick={() => handleTabChange("pending")}
+        >
+          <span className="doc-tab-icon">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </span>
+          <span className="doc-tab-label">Pending Review</span>
+          <span className="doc-tab-count">{stats.pendingReviewCount}</span>
+        </button>
       </div>
 
-      {/* 3. Folder Cards Strip */}
-      <div style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <h4 style={{ fontSize: '0.9375rem', fontWeight: 700, color: 'var(--ink)' }}>
-            Folders &amp; Document Categories
-          </h4>
-          {selectedFolderId && (
+      {/* ── 3b. Breadcrumbs + Folder Browser ─────────────────────────────── */}
+      <div className="doc-breadcrumb-bar">
+        <nav className="doc-breadcrumbs" aria-label="Folder path">
+          <button
+            type="button"
+            className={clsx("doc-crumb", !currentFolderId && "is-current")}
+            onClick={() => navigateToFolder(null)}
+          >
+            <IconHome size={13} />
+            <span>All Documents</span>
+          </button>
+          {folderTrail.map((crumb) => (
+            <React.Fragment key={crumb.id}>
+              <span className="doc-crumb-sep" aria-hidden="true">
+                /
+              </span>
+              <button
+                type="button"
+                className={clsx(
+                  "doc-crumb",
+                  currentFolderId === crumb.id && "is-current",
+                )}
+                onClick={() => navigateToFolder(crumb.id)}
+              >
+                {crumb.folder_type === "FLAT" ? (
+                  <IconShield size={13} />
+                ) : (
+                  <IconFolder size={13} />
+                )}
+                <span>{crumb.name}</span>
+              </button>
+            </React.Fragment>
+          ))}
+        </nav>
+
+        <div className="doc-breadcrumb-actions">
+          {currentFolderId && (
             <button
               type="button"
               className="btn btn-xs btn-ghost"
-              onClick={() => setSelectedFolderId(null)}
+              onClick={() =>
+                navigateToFolder(selectedFolder?.parent_id ?? null)
+              }
             >
-              Clear Folder Filter
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
+              </svg>
+              <span>Back</span>
             </button>
           )}
         </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-          {filteredFolders.map((folder) => {
-            const count = documents.filter((d) => d.folderId === folder.id).length;
-            const isSelected = selectedFolderId === folder.id;
-
-            return (
-              <div
-                key={folder.id}
-                className="card folder-card"
-                style={{
-                  padding: '14px',
-                  cursor: 'pointer',
-                  border: isSelected ? '2px solid var(--pine)' : '1px solid var(--border)',
-                  backgroundColor: isSelected ? 'var(--surface-sunken)' : '#ffffff',
-                  transition: 'all 0.15s ease',
-                  position: 'relative'
-                }}
-                onClick={() => setSelectedFolderId(isSelected ? null : folder.id)}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                  <div
-                    style={{
-                      width: '36px',
-                      height: '36px',
-                      borderRadius: 'var(--radius-md)',
-                      backgroundColor: folder.category === 'flat-specific' ? 'rgba(224, 138, 44, 0.15)' : 'rgba(46, 117, 89, 0.15)',
-                      color: folder.category === 'flat-specific' ? 'var(--saffron-dark)' : 'var(--pine)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                    </svg>
-                  </div>
-
-                  <span
-                    className={clsx(
-                      'badge',
-                      folder.category === 'flat-specific' ? 'badge-warning' : 'badge-pine'
-                    )}
-                    style={{ fontSize: '0.625rem' }}
-                  >
-                    {folder.assignedFlat ? `Flat ${folder.assignedFlat}` : 'All Society'}
-                  </span>
-                </div>
-
-                <strong style={{ fontSize: '0.875rem', color: 'var(--ink)', display: 'block', marginBottom: '2px' }}>
-                  {folder.name}
-                </strong>
-                <p style={{ fontSize: '0.75rem', color: 'var(--neutral)', marginBottom: '8px', lineHeight: 1.3 }}>
-                  {folder.description || 'General documents repository'}
-                </p>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: 'var(--neutral)', borderTop: '1px solid var(--border-subtle)', paddingTop: '6px' }}>
-                  <span>{count} Document{count !== 1 ? 's' : ''}</span>
-                  <span>{folder.createdAt}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
 
-      {/* 4. Documents Table */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h4 style={{ fontSize: '0.9375rem', fontWeight: 700, margin: 0, color: 'var(--ink)' }}>
-              Uploaded Files &amp; Certificates ({filteredDocuments.length})
-            </h4>
-            <span style={{ fontSize: '0.75rem', color: 'var(--neutral)' }}>
-              {selectedFolderId
-                ? `Showing files in folder: ${folders.find((f) => f.id === selectedFolderId)?.name}`
-                : 'Showing all society & resident flat documents'}
+      {/* ── 4. Search & Filter Bar ───────────────────────────────────────── */}
+      <div className="card doc-filter-bar">
+        <div className="doc-filter-fields">
+          {/* Search Box */}
+          <div className="doc-filter-field doc-filter-field--grow">
+            <label className="doc-filter-label" htmlFor="doc-search-input">
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              Search
+            </label>
+            <div className="doc-search">
+              <input
+                id="doc-search-input"
+                type="text"
+                placeholder="Filename or description..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setPage(1);
+                }}
+              />
+              <svg
+                className="doc-search-icon"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Category Filter */}
+          <div className="doc-filter-field">
+            <label className="doc-filter-label" htmlFor="doc-category-select">
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+              >
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                <line x1="7" y1="7" x2="7.01" y2="7" />
+              </svg>
+              Category
+            </label>
+            <select
+              id="doc-category-select"
+              className="doc-select"
+              value={selectedCategory}
+              onChange={(e) => {
+                setSelectedCategory(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">All Categories</option>
+              {DOCUMENT_CATEGORIES.map(category => <option key={category} value={category}>{category}</option>)}
+            </select>
+          </div>
+
+          {/* Building Filter */}
+          <div className="doc-filter-field">
+            <label className="doc-filter-label" htmlFor="doc-building-select">
+              <IconBuilding size={11} />
+              Building
+            </label>
+            <select
+              id="doc-building-select"
+              className="doc-select"
+              value={selectedBuildingId}
+              onChange={(e) => {
+                setSelectedBuildingId(e.target.value);
+                setSelectedFlatId("all");
+                setPage(1);
+              }}
+            >
+              <option value="all">All Buildings</option>
+              {buildings.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Flat Filter */}
+          {activeTab !== "society" && (
+            <div className="doc-filter-field">
+              <label className="doc-filter-label" htmlFor="doc-flat-select">
+                <IconHome size={11} />
+                Flat
+              </label>
+              <select
+                id="doc-flat-select"
+                className="doc-select"
+                value={selectedFlatId}
+                onChange={(e) => {
+                  setSelectedFlatId(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="all">All Flats</option>
+                {flats
+                  .filter(
+                    (f) =>
+                      selectedBuildingId === "all" ||
+                      f.building_id === selectedBuildingId,
+                  )
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      Flat {f.flat_identifier}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
+          {/* Status Filter */}
+          {activeTab !== "pending" && (
+            <div className="doc-filter-field">
+              <label className="doc-filter-label" htmlFor="doc-status-select">
+                <IconShield size={11} />
+                Status
+              </label>
+              <select
+                id="doc-status-select"
+                className="doc-select"
+                value={selectedStatus}
+                onChange={(e) => {
+                  setSelectedStatus(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="all">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING">Pending Review</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Active filter chips — each individually removable */}
+        {activeFilterChips.length > 0 && (
+          <div className="doc-active-filters">
+            <span className="doc-active-filters-label">Applied</span>
+            {activeFilterChips.map((chip) => (
+              <span key={chip.key} className="doc-filter-chip">
+                <span className="doc-filter-chip-key">{chip.label}:</span>
+                {chip.value}
+                <button
+                  type="button"
+                  className="doc-filter-chip-x"
+                  aria-label={`Remove ${chip.label} filter`}
+                  onClick={chip.clear}
+                >
+                  <svg
+                    width="9"
+                    height="9"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3.5"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost"
+              style={{ marginLeft: "auto" }}
+              onClick={() => {
+                setSearchQuery("");
+                setSelectedCategory("all");
+                setSelectedBuildingId("all");
+                setSelectedFlatId("all");
+                setSelectedStatus("all");
+                setPage(1);
+              }}
+            >
+              Clear All
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── 3c. Folder Grid ──────────────────────────────────────────────── */}
+      <section className="doc-folder-section" aria-label="Folders">
+        <div className="doc-folder-head">
+          <h3 className="doc-folder-title">
+            {currentFolderId
+              ? `Folders in ${selectedFolder?.name || "folder"}`
+              : "All Folders"}
+          </h3>
+          <span className="doc-folder-count">
+            {folders.length} folder{folders.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {foldersLoading ? (
+          <div className="doc-folder-grid">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="doc-folder-card is-skeleton"
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+        ) : folders.length === 0 ? (
+          <div className="doc-folder-empty">
+            <IconFolder size={20} />
+            <span>
+              {currentFolderId
+                ? "No sub-folders here yet."
+                : "No folders yet. Create one to organize your documents."}
             </span>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => setShowUploadModal(true)}
-          >
-            + Upload New File
-          </button>
-        </div>
-
-        <div className="table-responsive">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>Document Title &amp; File</th>
-                <th>Category</th>
-                <th>Assigned Target Scope</th>
-                <th>Size</th>
-                <th>Uploaded By &amp; Date</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredDocuments.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: 'var(--neutral)' }}>
-                    No documents found matching your filter criteria.
-                  </td>
-                </tr>
-              ) : (
-                filteredDocuments.map((doc) => {
-                  const folder = folders.find((f) => f.id === doc.folderId);
-                  return (
-                    <tr key={doc.id}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div
-                            style={{
-                              width: '32px',
-                              height: '32px',
-                              borderRadius: '6px',
-                              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                              color: '#dc2626',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              flexShrink: 0
-                            }}
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                              <polyline points="14 2 14 8 20 8" />
-                            </svg>
-                          </div>
-                          <div>
-                            <strong style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>
-                              {doc.title}
-                            </strong>
-                            <div style={{ fontSize: '0.6875rem', color: 'var(--neutral)', fontFamily: 'monospace' }}>
-                              {doc.fileName} • Folder: {folder?.name || 'General'}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                          {doc.category}
-                        </span>
-                      </td>
-                      <td>
-                        {doc.assignedFlat ? (
-                          <span
-                            className="badge badge-warning"
-                            style={{ fontSize: '0.6875rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-                              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                            </svg>
-                            Flat {doc.assignedFlat} (Private)
-                          </span>
-                        ) : (
-                          <span
-                            className="badge badge-success"
-                            style={{ fontSize: '0.6875rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <circle cx="12" cy="12" r="10" />
-                              <line x1="2" y1="12" x2="22" y2="12" />
-                            </svg>
-                            Entire Society (Public)
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontSize: '0.75rem', color: 'var(--neutral)', fontFamily: 'monospace' }}>
-                        {doc.fileSize}
-                      </td>
-                      <td>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--ink)', fontWeight: 500 }}>
-                          {doc.uploadedBy}
-                        </div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--neutral)' }}>
-                          {doc.uploadedAt}
-                        </div>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '6px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-xs btn-primary"
-                            onClick={() => handleOpenPreview(doc)}
-                            title="Preview Document"
-                          >
-                            Preview
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-xs btn-secondary"
-                            onClick={() => setReassignDoc(doc)}
-                            title="Assign to specific flat"
-                          >
-                            Assign Flat
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-xs btn-danger"
-                            onClick={() => {
-                              if (confirm(`Delete document "${doc.title}"?`)) {
-                                deleteDocument(doc.id);
-                                showToast(`Document "${doc.title}" deleted.`);
-                              }
-                            }}
-                            title="Delete Document"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* -------------------------------------------------------------
-       * MODAL 1: Create New Folder
-       * ------------------------------------------------------------- */}
-      {showCreateFolderModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateFolderModal(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Create Document Folder</h3>
-              <button className="modal-close-btn" onClick={() => setShowCreateFolderModal(false)}>
-                <IconClose size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleCreateFolder}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">Folder Name *</label>
-                  <input
-                    className="form-control"
-                    placeholder="e.g. Unit A-102 Possession Deeds"
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    required
-                    autoFocus
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Description (Optional)</label>
-                  <input
-                    className="form-control"
-                    placeholder="e.g. Confidential sale deed & meter transfer files"
-                    value={newFolderDesc}
-                    onChange={(e) => setNewFolderDesc(e.target.value)}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Folder Scope &amp; Target Category</label>
-                  <select
-                    className="form-select"
-                    value={newFolderCategory}
-                    onChange={(e) => setNewFolderCategory(e.target.value as any)}
+        ) : (
+          <div className="doc-folder-grid">
+            {folders.map((folder) => (
+              <div
+                key={folder.id}
+                className={clsx(
+                  "doc-folder-card",
+                  folder.folder_type === "FLAT" && "is-flat",
+                )}
+              >
+                <button
+                  type="button"
+                  className="doc-folder-open"
+                  onClick={() => openFolder(folder)}
+                  aria-label={`Open folder ${folder.name}`}
+                >
+                  <span className="doc-folder-icon">
+                    {folder.folder_type === "FLAT" ? (
+                      <IconShield size={18} />
+                    ) : (
+                      <IconFolder size={18} />
+                    )}
+                  </span>
+                  <span className="doc-folder-body">
+                    <span className="doc-folder-name">{folder.name}</span>
+                    <span className="doc-folder-meta">
+                      {folder.document_count ?? 0} document
+                      {(folder.document_count ?? 0) === 1 ? "" : "s"}
+                      {(folder.child_folder_count ?? 0) > 0 && (
+                        <>
+                          {" · "}
+                          {folder.child_folder_count} sub-folder
+                          {(folder.child_folder_count ?? 0) === 1 ? "" : "s"}
+                        </>
+                      )}
+                    </span>
+                  </span>
+                  <span
+                    className={clsx(
+                      "doc-folder-badge",
+                      folder.folder_type === "FLAT" ? "is-flat" : "is-society",
+                    )}
                   >
-                    <option value="society">Society General (All Residents)</option>
-                    <option value="legal">Legal &amp; Compliance (Fire NOC, OC)</option>
-                    <option value="financial">Financial &amp; AGM Records</option>
-                    <option value="flat-specific">Flat-Specific Private Vault (Assigned to One Flat)</option>
-                  </select>
-                </div>
+                    {folder.folder_type === "FLAT" ? "Flat Vault" : "Society"}
+                  </span>
+                </button>
 
-                {newFolderCategory === 'flat-specific' && (
-                  <div className="form-group">
-                    <label className="form-label">Target Resident Flat *</label>
-                    <select
-                      className="form-select"
-                      value={newFolderFlat}
-                      onChange={(e) => setNewFolderFlat(e.target.value)}
+                {canManage && (
+                  <div className="doc-folder-tools">
+                    <button
+                      type="button"
+                      className="doc-folder-tool"
+                      onClick={() => openUploadModal(folder.id)}
+                      title="Upload into this folder"
                     >
-                      <option value="A-101">Flat A-101 (Aarav Sharma)</option>
-                      <option value="A-102">Flat A-102 (Vikram Malhotra)</option>
-                      <option value="B-201">Flat B-201 (Pooja Nair)</option>
-                      <option value="B-302">Flat B-302 (Karan Singhania)</option>
-                      <option value="C-501">Flat C-501 (Dr. Ramesh Rao)</option>
-                    </select>
-                    <small style={{ color: 'var(--saffron-dark)', marginTop: '4px', display: 'block' }}>
-                      Residents of this flat will be able to view and download these documents directly on their phone app.
-                    </small>
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      <span>Upload</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="doc-folder-tool"
+                      onClick={() => openRenameFolderModal(folder)}
+                      title="Rename folder"
+                    >
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z" />
+                      </svg>
+                      <span>Rename</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="doc-folder-tool is-danger"
+                      onClick={() => openDeleteFolderModal(folder)}
+                      title="Delete folder"
+                    >
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                      <span>Delete</span>
+                    </button>
                   </div>
                 )}
               </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setShowCreateFolderModal(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Create Folder
-                </button>
-              </div>
-            </form>
+            ))}
           </div>
+        )}
+      </section>
+
+      {/* Result summary */}
+      {!isLoading && documents.length > 0 && (
+        <div className="doc-result-summary">
+          <span className="doc-result-count">{documents.length}</span>
+          <span>
+            {documents.length === 1 ? "document" : "documents"} on this page
+          </span>
+          <span aria-hidden="true">•</span>
+          <span className="doc-result-count">{totalCount}</span>
+          <span>total match{totalCount === 1 ? "" : "es"}</span>
         </div>
       )}
 
-      {/* -------------------------------------------------------------
-       * MODAL 2: Upload Document
-       * ------------------------------------------------------------- */}
+      {/* ── 5. Documents Table & Empty State ─────────────────────────────── */}
+      <div className="card doc-table-card">
+        {isLoading ? (
+          <div style={{ minHeight: 240 }} />
+        ) : loadError ? (
+          <div className="doc-error">
+            <div className="doc-error-icon">
+              <svg
+                width="26"
+                height="26"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <h3 className="doc-error-title">Unable to load documents</h3>
+            <p className="doc-error-desc">{loadError}</p>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void fetchDocuments()}
+            >
+              Try Again
+            </button>
+          </div>
+        ) : documents.length === 0 ? (
+          <div className="doc-empty">
+            <div className="doc-empty-icon">
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+            </div>
+            <h3 className="doc-empty-title">No Documents in this View</h3>
+            <p className="doc-empty-desc">
+              Upload society by-laws, audited statements, or assign confidential
+              purchase deeds to flat vaults.
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowUploadModal(true)}
+            >
+              Upload First Document
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="doc-table-scroll">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th>Sl. No.</th>
+                    <th
+                      aria-sort={
+                        sortBy === "name"
+                          ? sortOrder === "ASC"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="doc-sort-button"
+                        onClick={() => toggleSort("name")}
+                      >
+                        Document Name{" "}
+                        <span aria-hidden="true">{sortIndicator("name")}</span>
+                      </button>
+                    </th>
+                    <th
+                      aria-sort={
+                        sortBy === "category"
+                          ? sortOrder === "ASC"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="doc-sort-button"
+                        onClick={() => toggleSort("category")}
+                      >
+                        Category{" "}
+                        <span aria-hidden="true">
+                          {sortIndicator("category")}
+                        </span>
+                      </button>
+                    </th>
+                    <th>Folder</th>
+                    <th>Scope</th>
+                    <th>Linked Building / Flat</th>
+                    <th
+                      aria-sort={
+                        sortBy === "size"
+                          ? sortOrder === "ASC"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="doc-sort-button"
+                        onClick={() => toggleSort("size")}
+                      >
+                        Size{" "}
+                        <span aria-hidden="true">{sortIndicator("size")}</span>
+                      </button>
+                    </th>
+                    <th
+                      aria-sort={
+                        sortBy === "uploaded"
+                          ? sortOrder === "ASC"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="doc-sort-button"
+                        onClick={() => toggleSort("uploaded")}
+                      >
+                        Uploaded{" "}
+                        <span aria-hidden="true">
+                          {sortIndicator("uploaded")}
+                        </span>
+                      </button>
+                    </th>
+                    <th
+                      aria-sort={
+                        sortBy === "status"
+                          ? sortOrder === "ASC"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="doc-sort-button"
+                        onClick={() => toggleSort("status")}
+                      >
+                        Status{" "}
+                        <span aria-hidden="true">
+                          {sortIndicator("status")}
+                        </span>
+                      </button>
+                    </th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {documents.map((doc, index) => {
+                    const isFlatScope =
+                      doc.document_scope?.toUpperCase() === "FLAT";
+                    const flatLabel = getFlatLabel(doc.flat_id);
+                    const buildingLabel = getBuildingLabel(doc.building_id);
+
+                    return (
+                      <tr key={doc.id}>
+                        <td className="doc-serial">
+                          {(page - 1) * pageSize + index + 1}
+                        </td>
+                        <td>
+                          <div className="doc-name-cell">
+                            <div
+                              className={`doc-file-icon doc-file-icon--${isFlatScope ? "flat" : "society"}`}
+                            >
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                              >
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                <polyline points="14 2 14 8 20 8" />
+                              </svg>
+                            </div>
+                            <div>
+                              <div className="doc-doc-title">
+                                {doc.original_filename}
+                              </div>
+                              {doc.description && (
+                                <div className="doc-doc-desc">
+                                  {doc.description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        <td>
+                          <span className="doc-category">
+                            {doc.category || "General"}
+                          </span>
+                        </td>
+
+                        <td>
+                          {getFolderName(doc.folder_id) ? (
+                            <span className="doc-category">
+                              <IconFolder size={11} />
+                              <span style={{ marginLeft: "5px" }}>
+                                {getFolderName(doc.folder_id)}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="doc-muted">Repository root</span>
+                          )}
+                        </td>
+
+                        <td>
+                          {isFlatScope ? (
+                            <span className="badge badge-warning">
+                              Flat Vault
+                            </span>
+                          ) : (
+                            <span className="badge badge-info">Society</span>
+                          )}
+                        </td>
+
+                        <td>
+                          {isFlatScope ? (
+                            <span className="doc-flat-label">
+                              {flatLabel || "Unassigned Flat"}
+                            </span>
+                          ) : buildingLabel ? (
+                            <span
+                              style={{
+                                fontSize: "0.8125rem",
+                                color: "var(--ink)",
+                              }}
+                            >
+                              {buildingLabel}
+                            </span>
+                          ) : (
+                            <span className="doc-muted">Entire Society</span>
+                          )}
+                        </td>
+
+                        <td className="doc-muted">
+                          {formatBytes(doc.size_bytes)}
+                        </td>
+
+                        <td className="doc-muted">
+                          {new Date(doc.created_at).toLocaleDateString(
+                            "en-GB",
+                            {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            },
+                          )}
+                        </td>
+
+                        <td>
+                          <span
+                            className={
+                              doc.status === "ACTIVE"
+                                ? "badge badge-success"
+                                : doc.status === "PENDING"
+                                  ? "badge badge-warning"
+                                  : "badge badge-neutral"
+                            }
+                          >
+                            {doc.status || "Active"}
+                          </span>
+                        </td>
+
+                        <td>
+                          <div className="doc-actions">
+                            <button
+                              type="button"
+                              className="doc-action-trigger"
+                              onClick={() =>
+                                setOpenActionId((id) =>
+                                  id === doc.id ? null : doc.id,
+                                )
+                              }
+                              aria-label={`Actions for ${doc.original_filename}`}
+                              aria-expanded={openActionId === doc.id}
+                              title="Document actions"
+                            >
+                              <IconMoreVertical size={18} />
+                            </button>
+                            {openActionId === doc.id && (
+                              <div
+                                className="doc-actions-menu"
+                                role="menu"
+                                aria-label={`Actions for ${doc.original_filename}`}
+                              >
+                                <button
+                                  type="button"
+                                  className="doc-action-icon"
+                                  onClick={() => {
+                                    setSelectedDoc(doc);
+                                    setShowPreviewModal(true);
+                                    setOpenActionId(null);
+                                  }}
+                                  title="Preview"
+                                  aria-label="Preview"
+                                  role="menuitem"
+                                >
+                                  <IconEye size={16} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="doc-action-icon"
+                                  onClick={() => {
+                                    triggerFileDownload(
+                                      doc.id,
+                                      doc.original_filename,
+                                    );
+                                    setOpenActionId(null);
+                                  }}
+                                  title="Download"
+                                  aria-label="Download"
+                                  role="menuitem"
+                                >
+                                  <IconDownload size={16} />
+                                </button>
+                                {canManage && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="doc-action-icon"
+                                      onClick={() => {
+                                        handleOpenEdit(doc);
+                                        setOpenActionId(null);
+                                      }}
+                                      title="Edit metadata"
+                                      aria-label="Edit metadata"
+                                      role="menuitem"
+                                    >
+                                      <IconEdit size={16} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="doc-action-icon doc-action-icon--danger"
+                                      onClick={() => {
+                                        setSelectedDoc(doc);
+                                        setShowDeleteModal(true);
+                                        setOpenActionId(null);
+                                      }}
+                                      title="Delete"
+                                      aria-label="Delete"
+                                      role="menuitem"
+                                    >
+                                      <IconTrash size={16} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "12px 20px",
+                borderTop: "1px solid var(--border-subtle)",
+                background: "var(--surface)",
+                fontSize: "0.8125rem",
+                color: "var(--neutral)",
+              }}
+            >
+              <div>
+                Showing {(page - 1) * pageSize + 1} -{" "}
+                {Math.min(page * pageSize, totalCount)} of {totalCount} records
+              </div>
+
+              <div
+                style={{ display: "flex", gap: "10px", alignItems: "center" }}
+              >
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  style={{
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--border)",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  <option value={10}>10 per page</option>
+                  <option value={20}>20 per page</option>
+                  <option value={50}>50 per page</option>
+                </select>
+
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => p - 1)}
+                >
+                  Prev
+                </button>
+                <span>Page {page}</span>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost"
+                  disabled={page * pageSize >= totalCount}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── 6. Upload Document Modal ─────────────────────────────────────── */}
       {showUploadModal && (
-        <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Upload Document &amp; Assign Scope</h3>
-              <button className="modal-close-btn" onClick={() => setShowUploadModal(false)}>
-                <IconClose size={18} />
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "520px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3 className="doc-modal-title">Upload to Document Repository</h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowUploadModal(false)}
+              >
+                <IconClose size={16} />
               </button>
             </div>
-            <form onSubmit={handleUploadDocument}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">Target Folder *</label>
-                  <select
-                    className="form-select"
-                    value={uploadFolderId}
-                    onChange={(e) => setUploadFolderId(e.target.value)}
-                  >
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} {f.assignedFlat ? `(Flat ${f.assignedFlat})` : '(Society Wide)'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
 
-                <div className="form-group">
-                  <label className="form-label">Document Title *</label>
-                  <input
-                    className="form-control"
-                    placeholder="e.g. Unit A-101 Possession Letter"
-                    value={uploadTitle}
-                    onChange={(e) => setUploadTitle(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">File Name (Simulated)</label>
-                  <input
-                    className="form-control"
-                    placeholder="e.g. Unit_A101_Possession.pdf"
-                    value={uploadFileName}
-                    onChange={(e) => setUploadFileName(e.target.value)}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Document Category</label>
-                  <select
-                    className="form-select"
-                    value={uploadCategory}
-                    onChange={(e) => setUploadCategory(e.target.value)}
-                  >
-                    <option value="By-Laws & Rules">By-Laws &amp; Rules</option>
-                    <option value="Safety Compliance">Safety Compliance</option>
-                    <option value="AGM Records">AGM Records</option>
-                    <option value="Possession Deed">Possession Deed</option>
-                    <option value="Renovation NOC">Renovation NOC</option>
-                    <option value="Tenant KYC">Tenant KYC</option>
-                    <option value="Utility Transfer">Utility Transfer</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Access &amp; Visibility Scope</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <form
+              onSubmit={handleUploadSubmit}
+              style={{ display: "flex", flexDirection: "column", gap: "14px" }}
+            >
+              {/* File picker / dropzone */}
+              <div className="doc-form-field">
+                <span className="doc-form-label">File *</span>
+                <input
+                  ref={fileInputRef}
+                  id="upload-file-input"
+                  type="file"
+                  accept={ACCEPT_ATTRIBUTE}
+                  onChange={(e) =>
+                    handleFileSelected(e.target.files?.[0] || null)
+                  }
+                  style={{ display: "none" }}
+                />
+                {uploadFileObj ? (
+                  <div className="doc-file-selected">
+                    <div className="doc-file-selected-icon">
+                      <IconFileText size={16} />
+                    </div>
+                    <div className="doc-file-selected-body">
+                      <span className="doc-file-selected-name">
+                        {uploadFileObj.name}
+                      </span>
+                      <span className="doc-file-selected-size">
+                        {formatBytes(uploadFileObj.size)}
+                      </span>
+                    </div>
                     <button
                       type="button"
-                      className={clsx('btn btn-sm', uploadScope === 'society' ? 'btn-primary' : 'btn-secondary')}
-                      onClick={() => setUploadScope('society')}
+                      className="btn btn-xs btn-ghost"
+                      onClick={() => {
+                        handleFileSelected(null);
+                        if (fileInputRef.current)
+                          fileInputRef.current.value = "";
+                      }}
                     >
-                      All Society (Public)
-                    </button>
-                    <button
-                      type="button"
-                      className={clsx('btn btn-sm', uploadScope === 'flat' ? 'btn-primary' : 'btn-secondary')}
-                      onClick={() => setUploadScope('flat')}
-                    >
-                      Assign to Flat (Private)
+                      Change
                     </button>
                   </div>
-                </div>
-
-                {uploadScope === 'flat' && (
-                  <div className="form-group">
-                    <label className="form-label">Assign to Flat Number *</label>
-                    <select
-                      className="form-select"
-                      value={uploadFlat}
-                      onChange={(e) => setUploadFlat(e.target.value)}
-                    >
-                      <option value="A-101">Flat A-101 (Aarav Sharma)</option>
-                      <option value="A-102">Flat A-102 (Vikram Malhotra)</option>
-                      <option value="B-201">Flat B-201 (Pooja Nair)</option>
-                      <option value="B-302">Flat B-302 (Karan Singhania)</option>
-                      <option value="C-501">Flat C-501 (Dr. Ramesh Rao)</option>
-                    </select>
-                    <small style={{ color: 'var(--saffron-dark)', marginTop: '4px', display: 'block' }}>
-                      Only the resident in this flat will see this confidential document in their resident app vault.
-                    </small>
+                ) : (
+                  <div
+                    className={clsx(
+                      "doc-dropzone",
+                      isDragActive && "is-dragging",
+                      fileValidationError && "is-error",
+                    )}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => fileInputRef.current?.click()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        fileInputRef.current?.click();
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragActive(true);
+                    }}
+                    onDragLeave={() => setIsDragActive(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragActive(false);
+                      handleFileSelected(e.dataTransfer.files?.[0] || null);
+                    }}
+                  >
+                    <div className="doc-dropzone-icon">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                    </div>
+                    <span className="doc-dropzone-title">
+                      {isDragActive
+                        ? "Drop the file here"
+                        : "Drag & drop or click to browse"}
+                    </span>
+                    <span className="doc-dropzone-hint">
+                      PDF, PNG, JPG, WEBP or TXT — up to 10 MB
+                    </span>
                   </div>
                 )}
+              </div>
 
-                <div className="form-group">
-                  <label className="form-label">Description / Remarks</label>
-                  <textarea
-                    className="form-control"
-                    rows={2}
-                    placeholder="Notes regarding approval date, signatory, or reference IDs..."
-                    value={uploadDesc}
-                    onChange={(e) => setUploadDesc(e.target.value)}
-                  />
+              {/* Destination folder */}
+              <div className="doc-form-field">
+                <label
+                  className="doc-form-label"
+                  htmlFor="upload-folder-select"
+                >
+                  Destination Folder
+                </label>
+                <select
+                  id="upload-folder-select"
+                  className="doc-form-input"
+                  value={uploadFolderId}
+                  onChange={(e) => setUploadFolderId(e.target.value)}
+                >
+                  <option value="">Repository root (no folder)</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                      {f.folder_type === "FLAT" ? " — Flat Vault" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Document Scope *</label>
+                <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "0.8125rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="uploadScope"
+                      value="SOCIETY"
+                      checked={uploadScope === "SOCIETY"}
+                      onChange={() => setUploadScope("SOCIETY")}
+                      style={{ accentColor: "var(--pine)" }}
+                    />
+                    Society-Wide Document
+                  </label>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "0.8125rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="uploadScope"
+                      value="FLAT"
+                      checked={uploadScope === "FLAT"}
+                      onChange={() => setUploadScope("FLAT")}
+                      style={{ accentColor: "var(--pine)" }}
+                    />
+                    Flat Confidential Vault
+                  </label>
                 </div>
               </div>
 
-              <div className="modal-footer">
+              {uploadScope === "FLAT" && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "10px",
+                  }}
+                >
+                  <div className="doc-form-field">
+                    <label className="doc-form-label">Building</label>
+                    <select
+                      className="doc-form-input"
+                      value={uploadBuildingId}
+                      onChange={(e) => setUploadBuildingId(e.target.value)}
+                    >
+                      <option value="">Any Building</option>
+                      {buildings.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="doc-form-field">
+                    <label className="doc-form-label">Target Flat *</label>
+                    <select
+                      className="doc-form-input"
+                      value={uploadFlatId}
+                      onChange={(e) => setUploadFlatId(e.target.value)}
+                      required
+                    >
+                      <option value="">Select Flat...</option>
+                      {availableFlatsForUpload.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          Flat {f.flat_identifier}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Category *</label>
+                <select
+                  className="doc-form-input"
+                  value={uploadCategory}
+                  onChange={(e) => setUploadCategory(e.target.value)}
+                  required
+                >
+                  {DOCUMENT_CATEGORIES.map(category => <option key={category} value={category}>{category}</option>)}
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Status</label>
+                <select
+                  className="doc-form-input"
+                  value={uploadStatus}
+                  onChange={(e) => setUploadStatus(e.target.value)}
+                >
+                  <option value="ACTIVE">Active (Published)</option>
+                  <option value="PENDING">Pending Review</option>
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Description / Notes</label>
+                <textarea
+                  rows={2}
+                  className="doc-form-textarea"
+                  placeholder="Optional description or details about this document..."
+                  value={uploadDescription}
+                  onChange={(e) => setUploadDescription(e.target.value)}
+                />
+              </div>
+
+              {fileValidationError && (
+                <div className="doc-inline-error" role="alert">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>{fileValidationError}</span>
+                </div>
+              )}
+
+              {isUploading && (
+                <div className="doc-form-field" style={{ marginBottom: 0 }}>
+                  <span className="doc-form-label">Uploading...</span>
+                  <div className="doc-progress">
+                    <div className="doc-progress-bar" />
+                  </div>
+                </div>
+              )}
+
+              <div className="doc-modal-foot">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={isUploading}
+                >
+                  {isUploading ? "Uploading..." : "Confirm Upload"}
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost"
@@ -781,8 +2252,228 @@ export const AdminDocumentsSection: React.FC = () => {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Upload &amp; Publish
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── 7. Preview Modal ─────────────────────────────────────────────── */}
+      {showPreviewModal && selectedDoc && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "580px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3 className="doc-modal-title">Document Details</h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowPreviewModal(false)}
+              >
+                <IconClose size={16} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "12px",
+                fontSize: "0.875rem",
+              }}
+            >
+              <DocumentPreview key={selectedDoc.id} id={selectedDoc.id} mimeType={selectedDoc.mime_type} filename={selectedDoc.original_filename} />
+              <div className="doc-detail-panel">
+                <div className="doc-detail-name">
+                  {selectedDoc.original_filename}
+                </div>
+                <div className="doc-detail-meta">
+                  MIME: {selectedDoc.mime_type} • Size:{" "}
+                  {formatBytes(selectedDoc.size_bytes)}
+                </div>
+              </div>
+
+              <div className="doc-detail-grid">
+                <div>
+                  <span className="doc-detail-key">Scope</span>
+                  <div className="doc-detail-val">
+                    {selectedDoc.document_scope || "SOCIETY"}
+                  </div>
+                </div>
+                <div>
+                  <span className="doc-detail-key">Category</span>
+                  <div className="doc-detail-val">
+                    {selectedDoc.category || "General"}
+                  </div>
+                </div>
+                <div>
+                  <span className="doc-detail-key">Target Flat</span>
+                  <div className="doc-detail-val">
+                    {getFlatLabel(selectedDoc.flat_id) || "None (Society)"}
+                  </div>
+                </div>
+                <div>
+                  <span className="doc-detail-key">Status</span>
+                  <div className="doc-detail-val">
+                    {selectedDoc.status || "ACTIVE"}
+                  </div>
+                </div>
+              </div>
+
+              {selectedDoc.description && (
+                <div>
+                  <span className="doc-detail-key">Description</span>
+                  <p
+                    className="doc-form-hint"
+                    style={{
+                      marginTop: "2px",
+                      color: "var(--ink)",
+                      fontSize: "0.875rem",
+                    }}
+                  >
+                    {selectedDoc.description}
+                  </p>
+                </div>
+              )}
+
+              <div className="doc-modal-foot">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  onClick={() =>
+                    triggerFileDownload(
+                      selectedDoc.id,
+                      selectedDoc.original_filename,
+                    )
+                  }
+                >
+                  Download File
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowPreviewModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 8. Edit Metadata Modal ───────────────────────────────────────── */}
+      {showEditModal && selectedDoc && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "480px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3 className="doc-modal-title">Edit Document Metadata</h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowEditModal(false)}
+              >
+                <IconClose size={16} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleEditSubmit}
+              style={{ display: "flex", flexDirection: "column", gap: "14px" }}
+            >
+              <div className="doc-form-field">
+                <label className="doc-form-label">Category</label>
+                <select
+                  className="doc-form-input"
+                  value={editCategory}
+                  onChange={(e) => setEditCategory(e.target.value)}
+                >
+                  {DOCUMENT_CATEGORIES.map(category => <option key={category} value={category}>{category}</option>)}
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Status</label>
+                <select
+                  className="doc-form-input"
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                >
+                  <option value="ACTIVE">Active</option>
+                  <option value="PENDING">Pending Review</option>
+                  <option value="ARCHIVED">Archived</option>
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">
+                  Assigned Flat (For Flat Vaults)
+                </label>
+                <select
+                  className="doc-form-input"
+                  value={editFlatId}
+                  onChange={(e) => setEditFlatId(e.target.value)}
+                >
+                  <option value="">None (Society-Wide)</option>
+                  {flats.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      Flat {f.flat_identifier}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label" htmlFor="edit-folder-select">
+                  Folder
+                </label>
+                <select
+                  id="edit-folder-select"
+                  className="doc-form-input"
+                  value={editFolderId}
+                  onChange={(e) => setEditFolderId(e.target.value)}
+                >
+                  <option value="">Repository root (no folder)</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                      {f.folder_type === "FLAT" ? " — Flat Vault" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label">Description / Notes</label>
+                <textarea
+                  rows={2}
+                  className="doc-form-textarea"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                />
+              </div>
+
+              <div className="doc-modal-foot">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={isUpdating}
+                >
+                  {isUpdating ? "Saving..." : "Save Changes"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowEditModal(false)}
+                >
+                  Cancel
                 </button>
               </div>
             </form>
@@ -790,135 +2481,455 @@ export const AdminDocumentsSection: React.FC = () => {
         </div>
       )}
 
-      {/* -------------------------------------------------------------
-       * MODAL 3: Reassign Flat
-       * ------------------------------------------------------------- */}
-      {reassignDoc && (
-        <div className="modal-overlay" onClick={() => setReassignDoc(null)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Reassign Document Scope</h3>
-              <button className="modal-close-btn" onClick={() => setReassignDoc(null)}>
-                <IconClose size={18} />
-              </button>
+      {/* ── 9. Delete Confirmation Modal ─────────────────────────────────── */}
+      {showDeleteModal && selectedDoc && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "440px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3
+                className="doc-modal-title"
+                style={{ color: "var(--danger)" }}
+              >
+                Confirm Deletion
+              </h3>
             </div>
-            <div className="modal-body">
-              <p style={{ fontSize: '0.875rem', marginBottom: '12px' }}>
-                Reassign target visibility for <strong>{reassignDoc.title}</strong>:
-              </p>
-
-              <div className="form-group">
-                <label className="form-label">Select Visibility Target</label>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{ width: '100%', marginBottom: '8px', textAlign: 'left' }}
-                  onClick={() => handleSaveReassign(null)}
-                >
-                  Entire Society (Make Public to all residents)
-                </button>
-                {['A-101', 'A-102', 'B-201', 'B-302', 'C-501'].map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ width: '100%', marginBottom: '6px', textAlign: 'left' }}
-                    onClick={() => handleSaveReassign(f)}
-                  >
-                    Assign to Flat {f} (Private to Resident)
-                  </button>
-                ))}
-              </div>
+            <p
+              style={{
+                fontSize: "0.875rem",
+                color: "var(--ink)",
+                marginBottom: "var(--space-5)",
+              }}
+            >
+              Are you sure you want to remove{" "}
+              <strong>&ldquo;{selectedDoc.original_filename}&rdquo;</strong>{" "}
+              from the repository? This file will be deactivated.
+            </p>
+            <div className="doc-modal-foot" style={{ marginTop: 0 }}>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{
+                  flex: 1,
+                  backgroundColor: "var(--danger)",
+                  color: "#fff",
+                }}
+                onClick={handleConfirmDelete}
+              >
+                Delete File
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setShowDeleteModal(false)}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* -------------------------------------------------------------
-       * MODAL 4: Document Preview
-       * ------------------------------------------------------------- */}
-      {showPreviewModal && previewDoc && (
-        <div className="modal-overlay" onClick={() => setShowPreviewModal(false)}>
-          <div className="modal-dialog" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-                <h3 style={{ margin: 0 }}>{previewDoc.title}</h3>
-              </div>
-              <button className="modal-close-btn" onClick={() => setShowPreviewModal(false)}>
-                <IconClose size={18} />
+      {/* ── 10. Create Folder Modal ──────────────────────────────────────── */}
+      {showCreateFolderModal && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "520px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3 className="doc-modal-title">Create Folder</h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowCreateFolderModal(false)}
+              >
+                <IconClose size={16} />
               </button>
             </div>
-            <div className="modal-body">
-              <div
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '20px',
-                  textAlign: 'center',
-                  marginBottom: '16px'
-                }}
-              >
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--pine)" strokeWidth="1.5" style={{ margin: '0 auto 12px' }}>
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
-                  <polyline points="10 9 9 9 8 9" />
-                </svg>
-                <h4 style={{ fontSize: '1rem', color: 'var(--ink)', marginBottom: '4px' }}>
-                  {previewDoc.fileName}
-                </h4>
-                <span className="badge badge-success" style={{ marginBottom: '8px' }}>
-                  Digitally Signed &amp; Stamped
+
+            <form onSubmit={handleCreateFolder}>
+              <div className="doc-form-field">
+                <label className="doc-form-label" htmlFor="new-folder-name">
+                  Folder Name *
+                </label>
+                <input
+                  id="new-folder-name"
+                  type="text"
+                  className="doc-form-input"
+                  placeholder="e.g. Annual General Meeting 2026"
+                  value={folderName}
+                  onChange={(e) => setFolderName(e.target.value)}
+                  maxLength={150}
+                  autoFocus
+                  required
+                />
+                <span className="doc-form-hint">
+                  Names must be unique within the same location.
                 </span>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--neutral)', maxWidth: '400px', margin: '0 auto' }}>
-                  {previewDoc.description || 'Verified society record under Greenwood Heights RWA Management System.'}
-                </p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.8125rem', marginBottom: '12px' }}>
-                <div>
-                  <span style={{ color: 'var(--neutral)', display: 'block', fontSize: '0.7rem' }}>SCOPE</span>
-                  <strong>{previewDoc.assignedFlat ? `Private to Flat ${previewDoc.assignedFlat}` : 'Public to All Society'}</strong>
+              <div className="doc-form-field">
+                <label
+                  className="doc-form-label"
+                  htmlFor="new-folder-description"
+                >
+                  Description
+                </label>
+                <textarea
+                  id="new-folder-description"
+                  rows={2}
+                  className="doc-form-textarea"
+                  placeholder="Optional description for this folder..."
+                  value={folderDescription}
+                  onChange={(e) => setFolderDescription(e.target.value)}
+                />
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label" htmlFor="new-folder-type">
+                  Folder Type *
+                </label>
+                <select
+                  id="new-folder-type"
+                  className="doc-form-input"
+                  value={folderType}
+                  onChange={(e) =>
+                    setFolderType(e.target.value as "SOCIETY" | "FLAT")
+                  }
+                  // Nested folders inherit the parent's type.
+                  disabled={Boolean(currentFolderId)}
+                >
+                  <option value="SOCIETY">
+                    Society Folder — shared repository
+                  </option>
+                  <option value="FLAT">
+                    Flat Vault — confidential, one flat only
+                  </option>
+                </select>
+                {currentFolderId && (
+                  <span className="doc-form-hint">
+                    Sub-folders inherit the parent folder&apos;s type.
+                  </span>
+                )}
+              </div>
+
+              {!currentFolderId &&
+                folders.filter((f) => f.folder_type === folderType).length >
+                  0 && (
+                  <div className="doc-form-field">
+                    <label
+                      className="doc-form-label"
+                      htmlFor="new-folder-parent"
+                    >
+                      Parent Folder
+                    </label>
+                    <select
+                      id="new-folder-parent"
+                      className="doc-form-input"
+                      value={folderParentId}
+                      onChange={(e) => setFolderParentId(e.target.value)}
+                    >
+                      <option value="">Top level (no parent)</option>
+                      {folders
+                        .filter((f) => f.folder_type === folderType)
+                        .map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+
+              {folderType === "FLAT" && !folderParentId && (
+                <div className="doc-form-field">
+                  <label className="doc-form-label" htmlFor="new-folder-flat">
+                    Target Flat *
+                  </label>
+                  <select
+                    id="new-folder-flat"
+                    className="doc-form-input"
+                    value={folderFlatId}
+                    onChange={(e) => {
+                      setFolderFlatId(e.target.value);
+                      const flat = flats.find((f) => f.id === e.target.value);
+                      setFolderBuildingId(flat?.building_id || "");
+                    }}
+                    required
+                  >
+                    <option value="">Select flat...</option>
+                    {flats.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        Flat {f.flat_identifier}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="doc-form-hint">
+                    Only residents of this flat and administrators can access
+                    its contents.
+                  </span>
                 </div>
-                <div>
-                  <span style={{ color: 'var(--neutral)', display: 'block', fontSize: '0.7rem' }}>FILE SIZE</span>
-                  <strong>{previewDoc.fileSize}</strong>
+              )}
+
+              {createFolderError && (
+                <div className="doc-inline-error" role="alert">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>{createFolderError}</span>
                 </div>
-                <div>
-                  <span style={{ color: 'var(--neutral)', display: 'block', fontSize: '0.7rem' }}>UPLOADED BY</span>
-                  <strong>{previewDoc.uploadedBy}</strong>
+              )}
+
+              <div className="doc-modal-foot">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={isCreatingFolder}
+                >
+                  {isCreatingFolder ? "Creating..." : "Create Folder"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowCreateFolderModal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── 11. Rename Folder Modal ──────────────────────────────────────── */}
+      {showRenameFolderModal && selectedFolder && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "480px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3 className="doc-modal-title">Rename Folder</h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowRenameFolderModal(false)}
+              >
+                <IconClose size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleRenameFolder}>
+              <div className="doc-form-field">
+                <label className="doc-form-label" htmlFor="rename-folder-input">
+                  Folder Name *
+                </label>
+                <input
+                  id="rename-folder-input"
+                  type="text"
+                  className="doc-form-input"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  maxLength={150}
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="doc-form-field">
+                <label className="doc-form-label" htmlFor="rename-folder-desc">
+                  Description
+                </label>
+                <textarea
+                  id="rename-folder-desc"
+                  rows={2}
+                  className="doc-form-textarea"
+                  value={renameDescription}
+                  onChange={(e) => setRenameDescription(e.target.value)}
+                />
+              </div>
+
+              {renameError && (
+                <div className="doc-inline-error" role="alert">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>{renameError}</span>
                 </div>
-                <div>
-                  <span style={{ color: 'var(--neutral)', display: 'block', fontSize: '0.7rem' }}>DATE</span>
-                  <strong>{previewDoc.uploadedAt}</strong>
-                </div>
+              )}
+
+              <div className="doc-modal-foot">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={isRenamingFolder}
+                >
+                  {isRenamingFolder ? "Saving..." : "Save Changes"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowRenameFolderModal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── 12. Delete Folder Modal ──────────────────────────────────────── */}
+      {showDeleteFolderModal && selectedFolder && (
+        <div className="modal-backdrop">
+          <div
+            className="modal-card"
+            style={{ maxWidth: "520px", width: "100%" }}
+          >
+            <div className="doc-modal-head">
+              <h3
+                className="doc-modal-title"
+                style={{ color: "var(--danger)" }}
+              >
+                Delete Folder
+              </h3>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => setShowDeleteFolderModal(false)}
+              >
+                <IconClose size={16} />
+              </button>
+            </div>
+
+            <p
+              style={{
+                fontSize: "0.875rem",
+                color: "var(--ink)",
+                marginBottom: "var(--space-4)",
+              }}
+            >
+              Are you sure you want to delete{" "}
+              <strong>&ldquo;{selectedFolder.name}&rdquo;</strong>?
+            </p>
+
+            <div
+              className="doc-detail-panel"
+              style={{ marginBottom: "var(--space-4)" }}
+            >
+              <div className="doc-detail-key">This folder contains</div>
+              <div className="doc-detail-val" style={{ marginTop: "4px" }}>
+                {selectedFolder.document_count ?? 0} document
+                {(selectedFolder.document_count ?? 0) === 1 ? "" : "s"}
+                {(selectedFolder.child_folder_count ?? 0) > 0 && (
+                  <>
+                    {" · "}
+                    {selectedFolder.child_folder_count} sub-folder
+                    {(selectedFolder.child_folder_count ?? 0) === 1 ? "" : "s"}
+                  </>
+                )}
               </div>
             </div>
-            <div className="modal-footer">
+
+            {(selectedFolder.child_folder_count ?? 0) > 0 ? (
+              <p
+                className="doc-form-hint"
+                style={{ marginBottom: "var(--space-4)" }}
+              >
+                Sub-folders must be deleted before this folder can be removed.
+              </p>
+            ) : (selectedFolder.document_count ?? 0) > 0 ? (
+              <p
+                className="doc-form-hint"
+                style={{ marginBottom: "var(--space-4)" }}
+              >
+                This folder is not empty. Choose how its documents should be
+                handled:
+              </p>
+            ) : null}
+
+            {deleteFolderError && (
+              <div
+                className="doc-inline-error"
+                role="alert"
+                style={{ marginBottom: "var(--space-4)" }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <span>{deleteFolderError}</span>
+              </div>
+            )}
+
+            <div className="doc-modal-foot">
+              {(selectedFolder.document_count ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isDeletingFolder}
+                  onClick={() => handleDeleteFolder("detach")}
+                  title="Documents stay in the repository without a folder"
+                >
+                  Keep Documents
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{
+                  flex: 1,
+                  backgroundColor: "var(--danger)",
+                  color: "#fff",
+                }}
+                disabled={
+                  isDeletingFolder ||
+                  (selectedFolder.child_folder_count ?? 0) > 0
+                }
+                onClick={() => handleDeleteFolder("archive")}
+              >
+                {isDeletingFolder
+                  ? "Deleting..."
+                  : (selectedFolder.document_count ?? 0) > 0
+                    ? "Delete & Archive Documents"
+                    : "Delete Folder"}
+              </button>
               <button
                 type="button"
                 className="btn btn-ghost"
-                onClick={() => setShowPreviewModal(false)}
+                onClick={() => setShowDeleteFolderModal(false)}
               >
-                Close
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                onClick={() => {
-                  showToast(`Downloading ${previewDoc.fileName}...`);
-                  setShowPreviewModal(false);
-                }}
-              >
-                <IconDownload size={16} />
-                <span>Download PDF</span>
+                Cancel
               </button>
             </div>
           </div>

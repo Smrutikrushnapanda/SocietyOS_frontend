@@ -45,24 +45,26 @@ export const MyQrGatePassModal: React.FC = () => {
         </div>
 
         <div className="digital-qr-card">
-          <div className="qr-mock-code">
-            <svg
-              width="60"
-              height="60"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <rect width="7" height="7" x="3" y="3" />
-              <rect width="7" height="7" x="14" y="3" />
-              <rect width="7" height="7" x="3" y="14" />
-              <rect width="3" height="3" x="14" y="14" />
-              <rect width="3" height="3" x="18" y="18" />
-            </svg>
-            <span style={{ marginTop: '4px', fontWeight: 700, letterSpacing: '0.05em' }}>
-              {society.name.toUpperCase().replace(/\s+/g, '')}-{resident.flat.replace('-', '')}
-            </span>
+          <div style={{ textAlign: 'center', padding: '16px 8px' }}>
+            <div style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '50%',
+              background: '#fef3c7',
+              color: '#d97706',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 12px'
+            }}>
+              <IconQrCode size={28} />
+            </div>
+            <strong style={{ fontSize: '0.95rem', display: 'block', color: 'var(--pine-dark)' }}>
+              Gate Barrier QR Pass
+            </strong>
+            <p style={{ fontSize: '0.8rem', color: 'var(--neutral)', marginTop: '4px', lineHeight: 1.4 }}>
+              Digital QR Gate Pass synchronization is currently being developed on the backend. Please use your registered vehicle RFID tag or coordinate with the security guard at Gate 1.
+            </p>
           </div>
           <strong
             style={{
@@ -72,21 +74,21 @@ export const MyQrGatePassModal: React.FC = () => {
               marginTop: '6px'
             }}
           >
-            {resident.name}
+            {resident?.name || 'Resident'}
           </strong>
           <div style={{ fontSize: '0.75rem', color: 'var(--neutral)', marginTop: '2px' }}>
-            {resident.towerLabel.split('• ')[1] || 'Tower A #101'} • FastTag {resident.vehicleNo}
+            {resident?.towerLabel || 'Resident Portal'} {resident?.vehicleNo && resident.vehicleNo !== '—' ? `• Vehicle ${resident.vehicleNo}` : ''}
           </div>
           <div
             style={{
               fontSize: '0.6875rem',
-              color: 'var(--success)',
+              color: 'var(--pine-dark)',
               fontWeight: 700,
               marginTop: '8px',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '4px',
-              background: '#dcfce7',
+              background: '#e0f2fe',
               padding: '3px 10px',
               borderRadius: '99px'
             }}
@@ -96,24 +98,16 @@ export const MyQrGatePassModal: React.FC = () => {
                 width: '6px',
                 height: '6px',
                 borderRadius: '50%',
-                background: '#16a34a'
+                background: '#0284c7'
               }}
             ></span>
-            PASS ACTIVE & VALID AT ALL GATES
+            RFID / PHYSICAL ACCESS ACTIVE
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={closeModal}>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={closeModal}>
             Close
-          </button>
-          <button
-            className="btn btn-primary"
-            style={{ flex: 1.2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            onClick={handleSaveToWallet}
-          >
-            <IconDownload size={16} />
-            <span>Save to Wallet</span>
           </button>
         </div>
       </div>

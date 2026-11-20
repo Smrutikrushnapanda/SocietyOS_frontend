@@ -5,7 +5,7 @@
  *  1. Browser support check (Firebase Messaging requires a modern browser + HTTPS)
  *  2. Notification permission request
  *  3. FCM token acquisition via VAPID key
- *  4. Token registration with the backend POST /push-tokens
+ *  4. Token registration with the backend POST /api/v1/push-tokens via apiClient
  *
  * SECURITY:
  *  - Only NEXT_PUBLIC_FIREBASE_* values are used (public, safe for the browser bundle).
@@ -14,15 +14,13 @@
  *    The backend derives them from the Authorization header and org context header.
  */
 
-import { getMessaging, getToken, type Messaging } from 'firebase/messaging';
-import { getFirebaseApp } from './firebase';
+import { getMessaging, getToken, deleteToken, type Messaging } from 'firebase/messaging';
+import { firebaseConfig, getFirebaseApp } from './firebase';
+import { useAuthStore } from '../../store/useAuthStore';
+import { pushSession, pushTokenLifecycle, type RegistrationResult } from './push-token-lifecycle';
 
-export type PushRegistrationResult =
-  | { status: 'registered'; token: string }
-  | { status: 'permission_denied' }
-  | { status: 'unsupported' }
-  | { status: 'no_auth' }
-  | { status: 'error'; message: string };
+export type PushRegistrationResult = RegistrationResult;
+export const pushPlatform = 'WEB' as const;
 
 /**
  * Returns true if the current browser environment supports Firebase Messaging.
@@ -51,97 +49,44 @@ export function getFirebaseMessaging(): Messaging | null {
   }
 }
 
-/**
- * Requests notification permission, acquires an FCM token, and registers
- * it with the backend at POST /push-tokens.
- *
- * @param authToken  - Bearer JWT for the Authorization header.
- *                     Pass null/undefined to skip backend registration
- *                     (mock auth mode — token is still acquired and logged).
- * @param societyId  - The X-Organization-Id header value required by OrganizationGuard.
- *                     Pass null/undefined to skip backend registration.
- */
-export async function registerFCMToken(
-  authToken: string | null | undefined,
-  societyId: string | null | undefined
-): Promise<PushRegistrationResult> {
-  // 1. Check browser support
-  if (!isFCMSupported()) {
-    return { status: 'unsupported' };
-  }
-
-  // 2. Request notification permission
-  let permission: NotificationPermission;
-  try {
-    permission = await Notification.requestPermission();
-  } catch {
-    return { status: 'unsupported' };
-  }
-
-  if (permission !== 'granted') {
-    return { status: 'permission_denied' };
-  }
-
-  // 3. Get the Firebase Messaging instance
+export async function acquireBrowserPushToken(): Promise<string> {
   const messaging = getFirebaseMessaging();
-  if (!messaging) {
-    return { status: 'unsupported' };
+  if (!messaging) throw new Error('Push messaging unavailable');
+  if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.messagingSenderId || !firebaseConfig.appId) {
+    throw new Error('Public push configuration unavailable');
   }
+  const parameters = new URLSearchParams();
+  for (const [key, value] of Object.entries(firebaseConfig)) {
+    if (value) parameters.set(key, value);
+  }
+  const registration = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?${parameters}`, { scope: '/' });
+  return getToken(messaging, { vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY, serviceWorkerRegistration: registration });
+}
 
-  // 4. Register the service worker and get the FCM token
-  let fcmToken: string;
+export async function deleteBrowserPushToken(): Promise<void> {
+  const messaging = getFirebaseMessaging();
+  if (!messaging) throw new Error('Push reset unavailable');
+  if (!await deleteToken(messaging)) throw new Error('Push reset not confirmed');
+}
+
+export async function registerFCMToken(): Promise<PushRegistrationResult> {
+  const session = pushSession(useAuthStore.getState());
+  if (!session) return { status: 'no_auth' };
+  if (!isFCMSupported()) return { status: 'unsupported' };
   try {
-    const swRegistration = await navigator.serviceWorker.register(
-      '/firebase-messaging-sw.js',
-      { scope: '/' }
-    );
-
-    fcmToken = await getToken(messaging, {
-      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: swRegistration,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { status: 'error', message };
-  }
-
-  if (!fcmToken) {
-    return { status: 'error', message: 'FCM token was empty after getToken()' };
-  }
-
-  // 5. If no auth token or society ID, skip backend registration (mock mode).
-  if (!authToken || !societyId) {
-    console.info(
-      '[FCM] Token acquired; backend registration skipped because authentication/organization context is unavailable.'
-    );
-    return { status: 'registered', token: fcmToken };
-  }
-
-  // 6. Send only { token, platform } — backend derives user_id and organization_id
-  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5050';
-  try {
-    const response = await fetch(`${apiBase}/push-tokens`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
-        'X-Organization-Id': societyId,
-      },
-      body: JSON.stringify({
-        token: fcmToken,
-        platform: 'WEB',
-        // user_id and organization_id intentionally omitted
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      return { status: 'error', message: `Backend responded ${response.status}: ${text}` };
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      await pushTokenLifecycle.cleanup(session);
+      return { status: 'permission_denied' };
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { status: 'error', message: `Network error registering push token: ${message}` };
-  }
+    return await pushTokenLifecycle.register(session, () => {
+      const current = pushSession(useAuthStore.getState());
+      return !!current && current.userId === session.userId && current.organizationId === session.organizationId;
+    });
+  } catch { return { status: 'error', message: 'Push permission or registration unavailable.' }; }
+}
 
-  return { status: 'registered', token: fcmToken };
+export async function unregisterFCMToken(): Promise<void> {
+  const result = await pushTokenLifecycle.cleanup(pushSession(useAuthStore.getState()));
+  if (!result.confirmed) throw new Error('Push cleanup not confirmed. Server revocation or browser reset remains pending.');
 }

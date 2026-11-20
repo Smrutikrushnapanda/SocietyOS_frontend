@@ -6,6 +6,7 @@
 
 # Testing
 /coverage
+/.test-dist
 
 # Next.js build output
 /.next/

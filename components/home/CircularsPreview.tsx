@@ -10,7 +10,7 @@ interface CircularsPreviewProps {
 
 export const CircularsPreview: React.FC<CircularsPreviewProps> = ({ onViewAll }) => {
   const { notices } = useNoticeStore();
-  const previewNotices = notices.slice(0, 2);
+  const previewNotices = notices.slice(0, 1);
 
   return (
     <div>
